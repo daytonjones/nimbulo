@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import difflib
+import re
 from typing import Optional
+
+from rich.markup import escape
+from rich.text import Text
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button,
+    Checkbox,
     Footer,
     Header,
     Input,
@@ -20,6 +26,7 @@ from textual.widgets import (
 
 from .. import providers
 from ..models import AuthState, ProviderStatus, Urgency, format_expires
+from ..providers import oci_config
 from ..providers.base import Provider
 
 
@@ -33,6 +40,28 @@ def _badge(state: AuthState) -> str:
         AuthState.UNKNOWN: "white",
     }[state]
     return f"[{color}]●[/] {state.value}"
+
+
+_OCI_PROFILE_RE = re.compile(r"[A-Za-z0-9_.@-]+")
+
+
+def validate_oci_form(v: dict) -> Optional[str]:
+    """Return the first problem with the OCI api-key form values, or None. Plain text, not markup."""
+    name = v["profile"]
+    if not _OCI_PROFILE_RE.fullmatch(name) or name in (".", ".."):
+        return "profile name may only contain letters, digits and . _ @ - (and must not be '.' or '..')"
+    if not oci_config.validate_ocid(v["user"], "user"):
+        return "user OCID is not valid (expected ocid1.user.<realm>..<id>)"
+    if not oci_config.validate_ocid(v["tenancy"], "tenancy"):
+        return "tenancy OCID is not valid (expected ocid1.tenancy.<realm>..<id>)"
+    region = v["region"]
+    if region not in oci_config.KNOWN_REGIONS:
+        near = difflib.get_close_matches(region, oci_config.KNOWN_REGIONS, n=3, cutoff=0.6)
+        hint = f"; did you mean {', '.join(near)}?" if near else ""
+        return f"unknown region {region!r}{hint}"
+    if bool(v["key_file"]) == bool(v["generate_key"]):
+        return "choose exactly one: supply an existing key file or generate a new key pair"
+    return None
 
 
 class ProviderPane(Vertical):
@@ -101,6 +130,9 @@ class ProviderPane(Vertical):
                 password=True,
             )
 
+        if self.provider.key == "oci":
+            yield from self._compose_oci_form()
+
         with Horizontal(classes="row"):
             yield Button("Refresh", id=f"refresh-{self.provider.key}", variant="default")
             yield Button("Login / Re-auth", id=f"login-{self.provider.key}", variant="primary")
@@ -109,7 +141,24 @@ class ProviderPane(Vertical):
             else:
                 yield Button("Logout", id=f"logout-{self.provider.key}", variant="warning")
 
+    def _compose_oci_form(self) -> ComposeResult:
+        try:
+            defaults = self.provider.api_key_defaults()
+        except Exception:
+            defaults = {}
+        with Vertical(id="oci-form"):
+            yield Input(value=defaults.get("profile", ""), placeholder="profile name", id="oci-profile")
+            yield Input(placeholder="user OCID (ocid1.user.oc1..…)", id="oci-user")
+            yield Input(placeholder="tenancy OCID (ocid1.tenancy.oc1..…)", id="oci-tenancy")
+            yield Input(value=defaults.get("region", ""), placeholder="region (e.g. us-ashburn-1)", id="oci-region")
+            yield Input(placeholder="existing private key file (.pem)", id="oci-keyfile")
+            yield Checkbox("Generate a new key pair", id="oci-generate")
+            yield Checkbox("Overwrite existing profile", id="oci-overwrite")
+            yield Static("", id="oci-msg", classes="status")
+
     def on_mount(self) -> None:
+        if self.provider.key == "oci":
+            self._sync_oci_form()
         self._status_widget = self.query_one(f"#status-{self.provider.key}", Static)
         for attr, css_id in [
             ("_profile_select", f"#profile-{self.provider.key}"),
@@ -128,21 +177,22 @@ class ProviderPane(Vertical):
 
     def render_status(self, s: ProviderStatus) -> None:
         ident = s.identity
+        esc = escape if self.provider.key == "oci" else (lambda x: x)
         lines = [f"[b]{self.provider.label}[/]   {_badge(s.state)}"]
         if ident:
             if ident.user:
-                lines.append(f"user: {ident.user}")
+                lines.append(f"user: {esc(ident.user)}")
             if ident.account:
                 label = (self.provider.secondary_label or "account").lower()
-                lines.append(f"{label}: {ident.account}")
+                lines.append(f"{label}: {esc(str(ident.account))}")
             if ident.expires_at:
                 exp_label, urg = format_expires(ident.expires_at)
                 color = {Urgency.OK: "green", Urgency.SOON: "yellow", Urgency.EXPIRED: "red"}[urg]
                 lines.append(f"expires: [{color}]{exp_label}[/]")
         if s.active_profile:
-            lines.append(f"active: {s.active_profile}")
+            lines.append(f"active: {esc(s.active_profile)}")
         if s.message:
-            lines.append(f"[dim]{s.message}[/]")
+            lines.append(f"[dim]{esc(s.message)}[/]")
         if self._status_widget is not None:
             self._status_widget.update("\n".join(lines))
         if self._profile_select is not None:
@@ -150,6 +200,56 @@ class ProviderPane(Vertical):
             self._profile_select.set_options(opts)
             if s.active_profile and s.active_profile in s.profiles:
                 self._profile_select.value = s.active_profile
+
+    # --- OCI api-key form (oci only) ---------------------------------------
+
+    def _sync_oci_form(self) -> None:
+        self.query_one("#oci-form").display = self.selected_method() == "api-key"
+
+    def _set_oci_message(self, msg: str) -> None:
+        # Text() is never parsed as markup, so brackets in user data are safe.
+        self.query_one("#oci-msg", Static).update(Text(msg, style="red") if msg else "")
+
+    def oci_form_values(self) -> dict:
+        def val(wid: str) -> str:
+            return self.query_one(f"#{wid}", Input).value.strip()
+
+        generate = self.query_one("#oci-generate", Checkbox).value
+        return {
+            "profile": val("oci-profile"),
+            "user": val("oci-user"),
+            "tenancy": val("oci-tenancy"),
+            "region": val("oci-region"),
+            "key_file": None if generate else (val("oci-keyfile") or None),
+            "generate_key": generate,
+            "overwrite": self.query_one("#oci-overwrite", Checkbox).value,
+        }
+
+    @on(Select.Changed)
+    def _oci_method_changed(self, event: Select.Changed) -> None:
+        if self.provider.key == "oci" and event.select.id == "method-oci":
+            self._sync_oci_form()
+
+    @on(Checkbox.Changed, "#oci-generate")
+    def _oci_generate_changed(self, event: Checkbox.Changed) -> None:
+        self.query_one("#oci-keyfile", Input).disabled = event.value
+
+    @on(Input.Submitted)
+    def _oci_input_submitted(self, event: Input.Submitted) -> None:
+        wid = event.input.id or ""
+        if self.provider.key != "oci" or not wid.startswith("oci-"):
+            return
+        event.stop()
+        order = ["oci-profile", "oci-user", "oci-tenancy", "oci-region", "oci-keyfile"]
+        gen = self.query_one("#oci-generate", Checkbox).value
+        last = "oci-region" if gen else "oci-keyfile"
+        if wid == last:
+            self.app._login_pressed(self)
+        elif wid in order:
+            nxt = order[order.index(wid) + 1]
+            if gen and nxt == "oci-keyfile":
+                nxt = "oci-region"
+            self.query_one(f"#{nxt}").focus()
 
     def render_secondary(self, items: list[tuple[str, str]]) -> None:
         if self._secondary_select is None:
@@ -216,6 +316,10 @@ class CloudLoginTUI(App):
     Select { width: 38; margin-right: 2; }
     Input { width: 60; }
     Button { margin-right: 1; }
+    #oci-form { height: auto; padding: 0 1; }
+    #oci-form Input { height: 1; border: none; padding: 0 1; }
+    #oci-form Checkbox { height: 1; border: none; padding: 0; }
+    #oci-msg { padding: 0 1; }
     #log { height: 16; border: solid $primary; }
     """
     BINDINGS = [
@@ -277,7 +381,7 @@ class CloudLoginTUI(App):
             pane.refresh_status()
             self._log(f"[{key}] refreshing…")
         elif action == "login":
-            self._do_login(pane)
+            self._login_pressed(pane)
         elif action == "logout":
             self._do_logout(pane)
         elif action == "forget":
@@ -286,6 +390,14 @@ class CloudLoginTUI(App):
             self._do_set_secondary(pane)
         elif action == "refreshsec":
             pane.refresh_secondary()
+
+    def _login_pressed(self, pane: ProviderPane) -> None:
+        if pane.provider.key == "oci" and pane.selected_method() == "api-key":
+            problem = validate_oci_form(pane.oci_form_values())
+            pane._set_oci_message(problem or "")
+            if problem:
+                return
+        self._do_login(pane)
 
     def _on_output(self, key: str, line: str) -> None:
         if line.strip():
@@ -322,6 +434,15 @@ class CloudLoginTUI(App):
                 kwargs["configuration"] = pane.selected_profile()
         elif provider.key == "azure":
             pass
+        elif provider.key == "oci":
+            if method == "api-key":
+                kwargs.update(self.call_from_thread(pane.oci_form_values))
+            else:
+                if pane.selected_profile():
+                    kwargs["profile"] = pane.selected_profile()
+                region = self.call_from_thread(lambda: pane.query_one("#oci-region", Input).value.strip())
+                if region:
+                    kwargs["region"] = region
         elif provider.key in {"vultr", "digitalocean"}:
             token = (pane.token_value() or "").strip()
             if token:
@@ -337,6 +458,10 @@ class CloudLoginTUI(App):
         self.call_from_thread(
             self._log, f"[{provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
         )
+        if provider.key == "oci" and result.output and method == "api-key":
+            # public key + console upload steps; Log is plain text so brackets are literal
+            for line in result.output.splitlines():
+                self.call_from_thread(self._log, f"[{provider.key}] {line}")
         pane.refresh_status()
 
     @work(thread=True, exclusive=False)

@@ -1,0 +1,211 @@
+"""Textual pilot tests for the OCI api-key form. No real ~/.oci, CLI or network is touched."""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from textual.widgets import Checkbox, Input, Log, Select, Static, TabbedContent
+
+from cloud_login.models import LoginResult
+from cloud_login.providers.oci import OCIProvider
+from cloud_login.ui import tui
+
+USER = "ocid1.user.oc1..aaaaaaaabbbbbbbbcccccccc"
+TENANCY = "ocid1.tenancy.oc1..aaaaaaaabbbbbbbbcccccccc"
+FORM_IDS = ["oci-profile", "oci-user", "oci-tenancy", "oci-region", "oci-keyfile", "oci-generate", "oci-overwrite"]
+
+
+@pytest.fixture(autouse=True)
+def isolated(monkeypatch):
+    monkeypatch.setattr(tui.ProviderPane, "refresh_status", lambda self: None)
+    monkeypatch.setattr(
+        OCIProvider, "api_key_defaults",
+        lambda self: {"profile": "my-profile", "region": "eu-frankfurt-1", "key_dir": "/nonexistent/keys"},
+    )
+    calls: list[dict] = []
+
+    def fake_login(self, method="session", on_output=None, **kwargs):
+        calls.append({"method": method, **kwargs})
+        if on_output:
+            on_output("streamed line")
+        return LoginResult(ok=True, message="done [bold]", output="PUBLIC KEY [red]x[/]\nupload steps")
+
+    monkeypatch.setattr(OCIProvider, "login", fake_login)
+    return calls
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def form(app):
+    return app.query_one("#oci-form")
+
+
+async def click_login(pilot):
+    await pilot.click("#login-oci")
+    await pilot.pause(0.4)  # Button ignores presses while its "active" effect runs
+
+
+async def select_method(app, pilot, method):
+    app.query_one(TabbedContent).active = "oci"
+    await pilot.pause()
+    app.query_one("#method-oci", Select).value = method
+    await pilot.pause()
+
+
+def test_oci_form_hidden_for_other_methods():
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pilot.pause()
+            assert form(app).display is False  # initial method is session
+            await select_method(app, pilot, "api-key")
+            assert form(app).display is True
+            await select_method(app, pilot, "profile")
+            assert form(app).display is False
+            await select_method(app, pilot, "session")
+            assert form(app).display is False
+
+    run(go())
+
+
+def test_oci_form_visible_for_api_key():
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await select_method(app, pilot, "api-key")
+            for wid in FORM_IDS:
+                app.query_one(f"#{wid}")
+            assert app.query_one("#oci-profile", Input).value == "my-profile"
+            assert app.query_one("#oci-region", Input).value == "eu-frankfurt-1"
+            assert app.query_one("#oci-user", Input).password is False
+            # nothing secret-bearing in the form
+            assert not any(i.password for i in form(app).query(Input))
+
+    run(go())
+
+
+def test_invalid_ocid_shows_message_without_calling_login(isolated):
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await select_method(app, pilot, "api-key")
+            app.query_one("#oci-user", Input).value = "not-an-ocid"
+            app.query_one("#oci-tenancy", Input).value = TENANCY
+            app.query_one("#oci-generate", Checkbox).value = True
+            await pilot.pause()
+            await click_login(pilot)
+            msg = str(app.query_one("#oci-msg", Static).render())
+            assert "user OCID" in msg
+            # bad region suggests the closest, brackets in values stay literal
+            app.query_one("#oci-user", Input).value = USER
+            app.query_one("#oci-region", Input).value = "eu-frankfurt-[1]"
+            await click_login(pilot)
+            msg = str(app.query_one("#oci-msg", Static).render())
+            assert "unknown region" in msg and "eu-frankfurt-1" in msg and "eu-frankfurt-[1]" in msg
+            # neither / both of key file and generate
+            app.query_one("#oci-region", Input).value = "eu-frankfurt-1"
+            app.query_one("#oci-generate", Checkbox).value = False
+            await click_login(pilot)
+            assert "key file" in str(app.query_one("#oci-msg", Static).render())
+            # "both" is unreachable from the UI (generate disables the key-file input); the
+            # validator itself still rejects it
+            assert "exactly one" in tui.validate_oci_form({
+                "profile": "p", "user": USER, "tenancy": TENANCY, "region": "us-ashburn-1",
+                "key_file": "/k.pem", "generate_key": True, "overwrite": False})
+            # bad profile name
+            app.query_one("#oci-generate", Checkbox).value = False
+            app.query_one("#oci-profile", Input).value = "bad name/.."
+            await click_login(pilot)
+            assert "profile name" in str(app.query_one("#oci-msg", Static).render())
+
+    run(go())
+    assert isolated == []
+
+
+def test_submit_calls_login_with_kwargs(isolated):
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await select_method(app, pilot, "api-key")
+            app.query_one("#oci-profile", Input).value = "work"
+            app.query_one("#oci-user", Input).value = USER
+            app.query_one("#oci-tenancy", Input).value = TENANCY
+            app.query_one("#oci-region", Input).value = "us-ashburn-1"
+            app.query_one("#oci-generate", Checkbox).value = True
+            app.query_one("#oci-overwrite", Checkbox).value = True
+            await pilot.pause()
+            assert app.query_one("#oci-keyfile", Input).disabled is True
+            await pilot.click("#login-oci")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            lines = "\n".join(app.query_one("#log", Log).lines)
+            assert "streamed line" in lines
+            assert "PUBLIC KEY [red]x[/]" in lines and "upload steps" in lines
+            assert app.query_one("#oci-profile", Input).value == "work"  # values kept
+
+    run(go())
+    assert isolated == [{
+        "method": "api-key", "profile": "work", "user": USER, "tenancy": TENANCY,
+        "region": "us-ashburn-1", "key_file": None, "generate_key": True, "overwrite": True,
+    }]
+
+
+def test_enter_in_last_field_submits(isolated):
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await select_method(app, pilot, "api-key")
+            app.query_one("#oci-user", Input).value = USER
+            app.query_one("#oci-tenancy", Input).value = TENANCY
+            kf = app.query_one("#oci-keyfile", Input)
+            kf.value = "/k/key.pem"
+            kf.focus()
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+
+    run(go())
+    assert isolated and isolated[0]["key_file"] == "/k/key.pem" and isolated[0]["generate_key"] is False
+
+
+def test_session_method_uses_existing_login(isolated):
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            app.query_one(TabbedContent).active = "oci"
+            await pilot.pause(0.3)
+            app.query_one("#login-oci").press()
+            await pilot.pause(0.3)
+            await app.workers.wait_for_complete()
+
+    run(go())
+    assert isolated and isolated[0]["method"] == "session" and "user" not in isolated[0]
+
+
+def test_markup_in_status_does_not_crash():
+    async def go():
+        from cloud_login.models import AuthState, ProviderStatus
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            pane = app._panes["oci"]
+            pane.render_status(ProviderStatus("oci", AuthState.ERROR, message="bad [/oops] [x", active_profile="a[b"))
+            await pilot.pause()
+
+    run(go())
+
+
+def test_other_providers_panes_unchanged():
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pilot.pause()
+            for key in ("aws", "vultr", "digitalocean"):
+                assert app.query_one(f"#token-{key}", Input).password is True
+            for key, pane in app._panes.items():
+                if key != "oci":
+                    assert not pane.query("#oci-form")
+                    assert not pane.query("#oci-user")
+            assert len(app.query("#oci-form")) == 1
+
+    run(go())
