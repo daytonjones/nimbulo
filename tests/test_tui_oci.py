@@ -209,3 +209,47 @@ def test_other_providers_panes_unchanged():
             assert len(app.query("#oci-form")) == 1
 
     run(go())
+
+
+def test_form_usable_at_80x24():
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await select_method(app, pilot, "api-key")
+            await pilot.pause(0.3)
+            pane = app._panes["oci"]
+            assert pane.styles.overflow_y == "auto"
+            login = app.query_one("#login-oci")
+            login.focus()
+            await pilot.pause(0.3)
+            assert app.focused is login
+            assert login.region.height > 0
+            assert app.screen.region.contains_region(login.region)
+            # every form control reachable too, and the log still shows
+            for wid in FORM_IDS:
+                app.query_one(f"#{wid}").scroll_visible()
+            await pilot.pause(0.2)
+            log = app.query_one("#log")
+            assert app.screen.region.contains_region(log.region)
+            # other tabs keep the original log height
+            app.set_focus(None)
+            app.query_one(TabbedContent).active = "aws"
+            await pilot.pause(0.5)
+            assert not app.has_class("-oci-compact")
+            assert log.outer_size.height == 16
+
+    run(go())
+
+
+def test_other_panes_layout_unchanged_at_80x24():
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            for key, pane in app._panes.items():
+                if key != "oci":
+                    assert not pane.has_class("-oci")
+                    assert pane.styles.overflow_y != "auto"
+            assert app.query_one("#log").outer_size.height == 16
+
+    run(go())

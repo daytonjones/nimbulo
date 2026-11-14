@@ -70,6 +70,8 @@ class ProviderPane(Vertical):
     def __init__(self, provider: Provider) -> None:
         super().__init__()
         self.provider = provider
+        if provider.key == "oci":
+            self.add_class("-oci")
         self._status_widget: Static | None = None
         self._profile_select: Select | None = None
         self._method_select: Select | None = None
@@ -147,14 +149,19 @@ class ProviderPane(Vertical):
         except Exception:
             defaults = {}
         with Vertical(id="oci-form"):
-            yield Input(value=defaults.get("profile", ""), placeholder="profile name", id="oci-profile")
-            yield Input(placeholder="user OCID (ocid1.user.oc1..…)", id="oci-user")
-            yield Input(placeholder="tenancy OCID (ocid1.tenancy.oc1..…)", id="oci-tenancy")
-            yield Input(value=defaults.get("region", ""), placeholder="region (e.g. us-ashburn-1)", id="oci-region")
-            yield Input(placeholder="existing private key file (.pem)", id="oci-keyfile")
-            yield Checkbox("Generate a new key pair", id="oci-generate")
-            yield Checkbox("Overwrite existing profile", id="oci-overwrite")
-            yield Static("", id="oci-msg", classes="status")
+            with Horizontal(classes="oci-row"):
+                yield Input(value=defaults.get("profile", ""), placeholder="profile name", id="oci-profile")
+                yield Input(value=defaults.get("region", ""), placeholder="region (us-ashburn-1)", id="oci-region")
+            with Horizontal(classes="oci-row"):
+                yield Input(placeholder="user OCID (ocid1.user.oc1..…)", id="oci-user")
+            with Horizontal(classes="oci-row"):
+                yield Input(placeholder="tenancy OCID (ocid1.tenancy.oc1..…)", id="oci-tenancy")
+            with Horizontal(classes="oci-row"):
+                yield Input(placeholder="existing private key file (.pem)", id="oci-keyfile")
+                yield Checkbox("Generate a new key pair", id="oci-generate")
+            with Horizontal(classes="oci-row"):
+                yield Checkbox("Overwrite existing profile", id="oci-overwrite")
+                yield Static("", id="oci-msg")
 
     def on_mount(self) -> None:
         if self.provider.key == "oci":
@@ -205,6 +212,8 @@ class ProviderPane(Vertical):
 
     def _sync_oci_form(self) -> None:
         self.query_one("#oci-form").display = self.selected_method() == "api-key"
+        if hasattr(self.app, "_update_compact"):
+            self.app._update_compact()
 
     def _set_oci_message(self, msg: str) -> None:
         # Text() is never parsed as markup, so brackets in user data are safe.
@@ -316,10 +325,13 @@ class CloudLoginTUI(App):
     Select { width: 38; margin-right: 2; }
     Input { width: 60; }
     Button { margin-right: 1; }
+    ProviderPane.-oci { overflow-y: auto; }
     #oci-form { height: auto; padding: 0 1; }
-    #oci-form Input { height: 1; border: none; padding: 0 1; }
-    #oci-form Checkbox { height: 1; border: none; padding: 0; }
-    #oci-msg { padding: 0 1; }
+    .oci-row { height: 1; padding: 0; }
+    #oci-form Input { height: 1; border: none; padding: 0 1; width: 1fr; margin-right: 1; }
+    #oci-form Checkbox { height: 1; border: none; padding: 0; width: auto; }
+    #oci-msg { height: auto; width: 1fr; padding: 0 1; }
+    CloudLoginTUI.-oci-compact #log { height: 6; }
     #log { height: 16; border: solid $primary; }
     """
     BINDINGS = [
@@ -342,6 +354,24 @@ class CloudLoginTUI(App):
                     yield pane
         yield Log(id="log", highlight=True)
         yield Footer()
+
+    def _update_compact(self, active: str | None = None) -> None:
+        """OCI tab with the api-key form open: shrink the log so the whole form fits at 80x24."""
+        pane = self._panes.get("oci")
+        on = False
+        if pane is not None:
+            try:
+                on = (
+                    (active or self.query_one(TabbedContent).active) == "oci"
+                    and pane.query_one("#oci-form").display
+                )
+            except Exception:
+                on = False
+        self.set_class(on, "-oci-compact")
+
+    @on(TabbedContent.TabActivated)
+    def _on_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        self._update_compact(event.pane.id)
 
     def _log(self, msg: str) -> None:
         self.query_one("#log", Log).write_line(msg)
