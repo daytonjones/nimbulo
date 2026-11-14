@@ -152,6 +152,32 @@ def _write_new(path: Path, data: bytes, mode: int) -> None:
         f.write(data)
 
 
+def _format_fingerprint(der: bytes) -> str:
+    digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
+    return ":".join(digest[i : i + 2] for i in range(0, 32, 2))
+
+
+def fingerprint_for_key(path: Path | str) -> str:
+    """MD5 fingerprint of the public half of an existing unencrypted RSA private key.
+
+    The key is fed to openssl on stdin (never on the command line). Raises
+    RuntimeError if the key cannot be read or is not a usable unencrypted RSA key.
+    """
+    openssl = _openssl()
+    try:
+        key = Path(os.path.expanduser(str(path))).read_bytes()
+    except OSError as e:
+        raise RuntimeError(f"cannot read key file: {e.strerror}") from None
+    try:
+        der = _run([openssl, "rsa", "-pubout", "-outform", "DER", "-passin", "pass:"], key)
+    except RuntimeError:
+        raise RuntimeError(
+            "could not read the key file as an unencrypted RSA private key "
+            "(passphrase-protected keys are not supported)"
+        ) from None
+    return _format_fingerprint(der)
+
+
 def generate_key_pair(directory: Path, name: str) -> tuple[Path, Path, str]:
     """Generate an RSA-2048 API signing key. Returns (private, public, fingerprint)."""
     openssl = _openssl()
@@ -170,7 +196,7 @@ def generate_key_pair(directory: Path, name: str) -> tuple[Path, Path, str]:
         _write_new(pub, pub_pem, 0o644)
         created.append(pub)
         der = _run([openssl, "rsa", "-pubout", "-outform", "DER"], key)
-        digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
+        fingerprint = _format_fingerprint(der)
     except BaseException:
         for f in created:  # only files this call created
             try:
@@ -178,5 +204,4 @@ def generate_key_pair(directory: Path, name: str) -> tuple[Path, Path, str]:
             except OSError:
                 pass
         raise
-    fingerprint = ":".join(digest[i : i + 2] for i in range(0, 32, 2))
     return priv, pub, fingerprint

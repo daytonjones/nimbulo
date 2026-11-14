@@ -6,6 +6,7 @@ names, OCIDs, regions and token expiry surface.
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import os
 import re
@@ -20,6 +21,7 @@ from . import oci_config
 from .base import OutputCb, Provider
 
 DEFAULT_REGION = "us-ashburn-1"
+OCI_KEYS_DIR: Path = Path(os.path.expanduser("~/.oci/keys"))  # monkeypatchable in tests
 API_CHECK_TIMEOUT = 15
 _AUTH_FAIL_MARKERS = ("notauthenticated", "invalidkey", "not authenticated")
 # A bare "401" would match request ids / OCIDs; require the JSON status field.
@@ -166,8 +168,88 @@ class OCIProvider(Provider):
             st = self.status(kwargs.get("profile"))
             return LoginResult(ok=st.ok, message=st.message or f"profile {st.active_profile}: {st.state.value}")
         if method == "api-key":
-            return LoginResult(ok=False, message="api-key login not implemented yet")
+            return self._api_key_login(on_output, **kwargs)
         return LoginResult(ok=False, message=f"unknown login method: {method}")
+
+    def api_key_defaults(self) -> dict[str, str]:
+        """Pre-fill values for the api-key login form."""
+        cfg = oci_config.read_profiles()
+        active = self._pick_profile(None, cfg)
+        region = (cfg.get(active, {}).get("region") if active else None) or DEFAULT_REGION
+        profile = "my-profile" if "DEFAULT" in cfg else "DEFAULT"
+        return {"profile": profile,
+                "region": region, "key_dir": str(OCI_KEYS_DIR)}
+
+    def _api_key_login(self, on_output: OutputCb = None, **kw: Any) -> LoginResult:
+        def fail(msg: str) -> LoginResult:
+            return LoginResult(ok=False, message=msg)
+
+        name = str(kw.get("profile") or "")
+        user = str(kw.get("user") or "").strip()
+        tenancy = str(kw.get("tenancy") or "").strip()
+        region = str(kw.get("region") or "").strip()
+        key_file = kw.get("key_file") or None
+        generate = bool(kw.get("generate_key", False))
+        overwrite = bool(kw.get("overwrite", False))
+
+        if not name or re.search(r"[\s\[\]]", name):
+            return fail("profile name must be non-empty and contain no whitespace, '[' or ']'")
+        if not oci_config.validate_ocid(user, "user"):
+            return fail("user OCID is not valid (expected ocid1.user.<realm>..<id>)")
+        if not oci_config.validate_ocid(tenancy, "tenancy"):
+            return fail("tenancy OCID is not valid (expected ocid1.tenancy.<realm>..<id>)")
+        if region not in oci_config.KNOWN_REGIONS:
+            near = difflib.get_close_matches(region, oci_config.KNOWN_REGIONS, n=3, cutoff=0.6)
+            hint = f"; did you mean {', '.join(near)}?" if near else ""
+            return fail(f"unknown region {region!r}{hint}")
+        if bool(key_file) == generate:
+            return fail("choose exactly one: supply an existing key file or generate a new key pair")
+        if key_file:
+            kp = Path(os.path.expanduser(str(key_file)))
+            if not kp.is_file():
+                return fail(f"key file not found: {kp}")
+        if name in oci_config.read_profiles() and not overwrite:
+            return fail(f"profile {name} already exists; enable overwrite to replace it")
+
+        pub_pem = ""
+        try:
+            if generate:
+                priv, pub, fingerprint = oci_config.generate_key_pair(OCI_KEYS_DIR, name)
+                pub_pem = pub.read_text()
+                key_path = str(priv)
+            else:
+                key_path = str(kp)
+                fingerprint = oci_config.fingerprint_for_key(kp)
+        except (RuntimeError, OSError) as exc:  # FileExistsError is an OSError
+            return fail(f"key setup failed: {exc}")
+        try:
+            oci_config.write_api_key_profile(
+                name, user=user, tenancy=tenancy, region=region,
+                key_file=key_path, fingerprint=fingerprint, overwrite=overwrite)
+        except FileExistsError:
+            return fail(f"profile {name} already exists; enable overwrite to replace it")
+        except (ValueError, OSError) as exc:
+            return fail(f"could not write OCI config: {exc}")
+        if on_output:
+            on_output(f"wrote profile {name}; verifying")
+
+        steps = ("Upload the public key in the OCI console: Identity -> Users -> your user -> "
+                 "API keys -> Add API key -> paste public key.")
+        output = "\n".join(p for p in (pub_pem.strip(), steps, f"Fingerprint: {fingerprint}") if p)
+        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", name],
+                                 timeout=API_CHECK_TIMEOUT)
+        if rc == 0:
+            return LoginResult(ok=True, message=f"logged in as profile {name}", output=output)
+        if rc == 124 or not _is_auth_failure(err + out):
+            why = (f"could not reach OCI (timed out after {API_CHECK_TIMEOUT}s)" if rc == 124
+                   else f"verification failed ({self._last_line(err, out) or 'unknown error'})")
+            msg = (f"profile {name} was saved but {why}. If you have not uploaded the public key yet, "
+                   f"add it in the OCI console (fingerprint {fingerprint}); then use Refresh or log in again.")
+        else:
+            msg = (f"profile {name} was saved but OCI rejected the key. Upload the public key in the "
+                   f"OCI console (Identity -> Users -> your user -> API keys -> Add API key), "
+                   f"fingerprint {fingerprint}, then use Refresh or log in again.")
+        return LoginResult(ok=False, message=msg, output=output)
 
     def logout(self, profile: str | None = None) -> LoginResult:
         cfg = oci_config.read_profiles()

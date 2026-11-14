@@ -163,11 +163,6 @@ def test_login_profile_method_only_validates(fake_run, env):
     assert all(c[:3] != ["oci", "session", "authenticate"] for c in fake_run.calls)
 
 
-def test_login_api_key_not_implemented(fake_run, env):
-    res = OCIProvider().login("api-key")
-    assert not res.ok and "not implemented" in res.message
-
-
 def test_login_methods():
     assert OCIProvider().login_methods() == ["session", "profile", "api-key"]
 
