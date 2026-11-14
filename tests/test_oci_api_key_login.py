@@ -95,8 +95,9 @@ def test_existing_profile_requires_overwrite(env, fake_run):
 
 
 def test_verifies_after_write(env, fake_run):
-    fake_run.add(["oci", "iam", "region", "list", "--profile", "mine"], rc=1,
-                 err='{"status": 401, "code": "NotAuthenticated"}')
+    fake_run.add(
+        ["oci", "iam", "region", "list", "--profile", "mine"], rc=1, err='{"status": 401, "code": "NotAuthenticated"}'
+    )
     res, _ = _login(env)
     assert not res.ok
     fp = oci_config.read_profiles()["mine"]["fingerprint"]  # profile kept
@@ -113,8 +114,7 @@ def test_offline_failure_worded_differently(env, fake_run):
 
 def test_api_key_defaults(env):
     p = OCIProvider()
-    assert p.api_key_defaults() == {"profile": "DEFAULT", "region": "us-ashburn-1",
-                                    "key_dir": str(env / "keys")}
+    assert p.api_key_defaults() == {"profile": "DEFAULT", "region": "us-ashburn-1", "key_dir": str(env / "keys")}
     (env / "config").write_text("[DEFAULT]\nregion=eu-paris-1\ntenancy=t\n")
     d = p.api_key_defaults()
     assert d["profile"] == "my-profile" and d["region"] == "eu-paris-1"
@@ -147,8 +147,9 @@ def test_accepts_realistic_profile_names(env, fake_run, good):
 
 def test_failed_profile_write_removes_generated_keys(env, fake_run, monkeypatch):
     real = oci_config.write_api_key_profile
-    monkeypatch.setattr(oci_config, "write_api_key_profile",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(
+        oci_config, "write_api_key_profile", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+    )
     res, _ = _login(env)
     assert not res.ok
     assert list((env / "keys").iterdir()) == []
@@ -159,8 +160,9 @@ def test_failed_profile_write_removes_generated_keys(env, fake_run, monkeypatch)
 
 def test_user_supplied_key_never_deleted_on_failure(env, fake_run, monkeypatch):
     oci_config.generate_key_pair(env / "k", "x")
-    monkeypatch.setattr(oci_config, "write_api_key_profile",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(
+        oci_config, "write_api_key_profile", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+    )
     res, _ = _login(env, generate_key=False, key_file=str(env / "k" / "x.pem"))
     assert not res.ok
     assert (env / "k" / "x.pem").is_file() and (env / "k" / "x_public.pem").is_file()

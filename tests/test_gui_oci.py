@@ -1,4 +1,5 @@
 """Qt tests for the OCI api-key form. No real ~/.oci, CLI, network or settings file is touched."""
+
 from __future__ import annotations
 
 import os
@@ -34,12 +35,14 @@ def isolated(monkeypatch, tmp_path, qapp):
     monkeypatch.setattr(settings, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(settings, "SETTINGS_FILE", tmp_path / "settings.json")
     monkeypatch.setattr(
-        OCIProvider, "api_key_defaults",
+        OCIProvider,
+        "api_key_defaults",
         lambda self: {"profile": "my-profile", "region": "eu-frankfurt-1", "key_dir": str(tmp_path / "keys")},
     )
     for cls in (OCIProvider, AWSProvider):
         monkeypatch.setattr(
-            cls, "status",
+            cls,
+            "status",
             lambda self, profile=None: ProviderStatus(self.key, AuthState.UNAUTHENTICATED),
         )
     calls: list[dict] = []
@@ -145,10 +148,18 @@ def test_gui_oci_form_submit_calls_login_with_kwargs(isolated):
     fill(tab, generate=True, overwrite=True, key_file="/ignored.pem")
     tab.login_btn.click()
     settle(tab)
-    assert isolated == [{
-        "method": "api-key", "profile": "work", "user": USER, "tenancy": TENANCY,
-        "region": "us-ashburn-1", "key_file": None, "generate_key": True, "overwrite": True,
-    }]
+    assert isolated == [
+        {
+            "method": "api-key",
+            "profile": "work",
+            "user": USER,
+            "tenancy": TENANCY,
+            "region": "us-ashburn-1",
+            "key_file": None,
+            "generate_key": True,
+            "overwrite": True,
+        }
+    ]
     text = "\n".join(logs)
     assert "streamed line" in text and "upload steps" in text and "BEGIN PUBLIC KEY" in text
     assert tab.oci_fields["profile"].text() == "work"  # values kept
@@ -203,9 +214,11 @@ def test_gui_other_providers_unchanged(monkeypatch):
     assert aws.method_combo.itemText(0) == AWSProvider().login_methods()[0]
     seen: list[dict] = []
     monkeypatch.setattr(
-        AWSProvider, "login",
+        AWSProvider,
+        "login",
         lambda self, method="sso", on_output=None, **kw: (
-            seen.append({"method": method, **kw}) or LoginResult(ok=True, message="ok")),
+            seen.append({"method": method, **kw}) or LoginResult(ok=True, message="ok")
+        ),
     )
     aws.profile_combo.addItem("dev")
     aws.method_combo.setCurrentText("sso")

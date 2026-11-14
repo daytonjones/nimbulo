@@ -1,4 +1,5 @@
 """Toolkit-independent validation for the OCI api-key login form (shared by TUI and GUI)."""
+
 from __future__ import annotations
 
 import difflib

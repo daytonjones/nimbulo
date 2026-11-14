@@ -3,6 +3,7 @@
 Secrets are never passed on command lines, logged or returned: only profile
 names, OCIDs, regions and token expiry surface.
 """
+
 from __future__ import annotations
 
 import base64
@@ -38,6 +39,8 @@ _clock = time.monotonic  # monkeypatchable in tests
 def _is_auth_failure(text: str) -> bool:
     low = text.lower()
     return any(m in low for m in _AUTH_FAIL_MARKERS) or bool(_STATUS_401.search(low))
+
+
 _PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_.@-]+")
 _API_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file")
 
@@ -84,32 +87,42 @@ class OCIProvider(Provider):
         cfg = oci_config.read_profiles()
         names = list(cfg)
         if not self.cli_available():
-            return ProviderStatus(self.key, AuthState.NOT_INSTALLED, profiles=names,
-                                  message="oci CLI not found on PATH")
+            return ProviderStatus(
+                self.key, AuthState.NOT_INSTALLED, profiles=names, message="oci CLI not found on PATH"
+            )
         target = self._pick_profile(profile, cfg)
         if not target:
             return ProviderStatus(
-                self.key, AuthState.UNAUTHENTICATED, profiles=names,
+                self.key,
+                AuthState.UNAUTHENTICATED,
+                profiles=names,
                 message="no OCI config found; log in with the session, profile or api-key method",
             )
         opts = cfg.get(target)
         if opts is None:
-            return ProviderStatus(self.key, AuthState.UNAUTHENTICATED, active_profile=target,
-                                  profiles=names, message=f"profile {target} not found in OCI config")
+            return ProviderStatus(
+                self.key,
+                AuthState.UNAUTHENTICATED,
+                active_profile=target,
+                profiles=names,
+                message=f"profile {target} not found in OCI config",
+            )
         if opts.get("security_token_file"):
             return self._session_status(target, opts, names)
         return self._api_key_status(target, opts, names)
 
     def _session_status(self, target: str, opts: dict[str, str], names: list[str]) -> ProviderStatus:
         def result(state: AuthState, message: str = "", ident: Identity | None = None) -> ProviderStatus:
-            return ProviderStatus(self.key, state, identity=ident, active_profile=target,
-                                  profiles=names, message=message)
+            return ProviderStatus(
+                self.key, state, identity=ident, active_profile=target, profiles=names, message=message
+            )
 
         expires, err = _token_expiry(opts["security_token_file"])
         if expires is None:
             return result(AuthState.UNAUTHENTICATED, err)
-        ident = Identity(account=opts.get("tenancy"), expires_at=expires,
-                         extra={"region": opts.get("region"), "kind": "session"})
+        ident = Identity(
+            account=opts.get("tenancy"), expires_at=expires, extra={"region": opts.get("region"), "kind": "session"}
+        )
         if expires <= datetime.now(timezone.utc):
             return result(AuthState.EXPIRED, "session token expired", ident)
         rc, out, serr = self._run(["oci", "session", "validate", "--profile", target, "--local"], timeout=20)
@@ -122,16 +135,24 @@ class OCIProvider(Provider):
     def _api_key_status(self, target: str, opts: dict[str, str], names: list[str]) -> ProviderStatus:
         missing = [k for k in _API_KEY_FIELDS if not opts.get(k)]
         if missing:
-            return ProviderStatus(self.key, AuthState.UNAUTHENTICATED, active_profile=target, profiles=names,
-                                  message=f"profile {target} is missing: {', '.join(missing)}")
-        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", target],
-                                 timeout=API_CHECK_TIMEOUT)
+            return ProviderStatus(
+                self.key,
+                AuthState.UNAUTHENTICATED,
+                active_profile=target,
+                profiles=names,
+                message=f"profile {target} is missing: {', '.join(missing)}",
+            )
+        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", target], timeout=API_CHECK_TIMEOUT)
         if rc == 0:
             notes = " ".join(ln.strip() for ln in err.splitlines() if ln.strip().startswith("WARNING"))
-            ident = Identity(account=opts.get("tenancy"), user=opts.get("user"),
-                             extra={"region": opts.get("region"), "kind": "api-key"})
-            return ProviderStatus(self.key, AuthState.AUTHENTICATED, identity=ident,
-                                  active_profile=target, profiles=names, message=notes)
+            ident = Identity(
+                account=opts.get("tenancy"),
+                user=opts.get("user"),
+                extra={"region": opts.get("region"), "kind": "api-key"},
+            )
+            return ProviderStatus(
+                self.key, AuthState.AUTHENTICATED, identity=ident, active_profile=target, profiles=names, message=notes
+            )
         msg = self._last_line(err, out) or "OCI check failed"
         if rc == 124:
             state, msg = AuthState.ERROR, f"could not reach OCI (timed out after {API_CHECK_TIMEOUT}s)"
@@ -160,11 +181,12 @@ class OCIProvider(Provider):
             region = kwargs.get("region") or oci_config.read_profiles().get(profile, {}).get("region") or DEFAULT_REGION
             rc, output = self._popen_stream(
                 ["oci", "session", "authenticate", "--profile-name", profile, "--region", region],
-                on_output=on_output, timeout=300,
+                on_output=on_output,
+                timeout=300,
             )
-            return LoginResult(ok=(rc == 0),
-                               message="session login complete" if rc == 0 else "session login failed",
-                               output=output)
+            return LoginResult(
+                ok=(rc == 0), message="session login complete" if rc == 0 else "session login failed", output=output
+            )
         if method == "profile":
             st = self.status(kwargs.get("profile"))
             return LoginResult(ok=st.ok, message=st.message or f"profile {st.active_profile}: {st.state.value}")
@@ -186,8 +208,7 @@ class OCIProvider(Provider):
         active = self._pick_profile(None, cfg)
         region = (cfg.get(active, {}).get("region") if active else None) or DEFAULT_REGION
         profile = "my-profile" if "DEFAULT" in cfg else "DEFAULT"
-        return {"profile": profile,
-                "region": region, "key_dir": str(OCI_KEYS_DIR)}
+        return {"profile": profile, "region": region, "key_dir": str(OCI_KEYS_DIR)}
 
     def _api_key_login(self, on_output: OutputCb = None, **kw: Any) -> LoginResult:
         def fail(msg: str) -> LoginResult:
@@ -202,8 +223,7 @@ class OCIProvider(Provider):
         overwrite = bool(kw.get("overwrite", False))
 
         if not _PROFILE_NAME_RE.fullmatch(name) or name in (".", ".."):
-            return fail("profile name may only contain letters, digits and . _ @ - "
-                        "(and must not be '.' or '..')")
+            return fail("profile name may only contain letters, digits and . _ @ - (and must not be '.' or '..')")
         if not oci_config.validate_ocid(user, "user"):
             return fail("user OCID is not valid (expected ocid1.user.<realm>..<id>)")
         if not oci_config.validate_ocid(tenancy, "tenancy"):
@@ -224,12 +244,13 @@ class OCIProvider(Provider):
         pub_pem = ""
         generated: list[Path] = []  # only files this call created; removed on later failure
         if generate:
-            existing = [p for p in (OCI_KEYS_DIR / f"{name}.pem", OCI_KEYS_DIR / f"{name}_public.pem")
-                        if p.exists()]
+            existing = [p for p in (OCI_KEYS_DIR / f"{name}.pem", OCI_KEYS_DIR / f"{name}_public.pem") if p.exists()]
             if existing:
-                return fail(f"key files already exist at {existing[0]}; pass key_file={existing[0]} "
-                            "to reuse them, or remove them to generate a new key pair "
-                            "(overwrite applies to the profile only)")
+                return fail(
+                    f"key files already exist at {existing[0]}; pass key_file={existing[0]} "
+                    "to reuse them, or remove them to generate a new key pair "
+                    "(overwrite applies to the profile only)"
+                )
         try:
             if generate:
                 priv, pub, fingerprint = oci_config.generate_key_pair(OCI_KEYS_DIR, name)
@@ -246,8 +267,14 @@ class OCIProvider(Provider):
             return fail(f"key setup failed: {exc}")
         try:
             oci_config.write_api_key_profile(
-                name, user=user, tenancy=tenancy, region=region,
-                key_file=key_path, fingerprint=fingerprint, overwrite=overwrite)
+                name,
+                user=user,
+                tenancy=tenancy,
+                region=region,
+                key_file=key_path,
+                fingerprint=fingerprint,
+                overwrite=overwrite,
+            )
         except FileExistsError:
             self._discard(generated)
             return fail(f"profile {name} already exists; enable overwrite to replace it")
@@ -257,22 +284,30 @@ class OCIProvider(Provider):
         if on_output:
             on_output(f"wrote profile {name}; verifying")
 
-        steps = ("Upload the public key in the OCI console: Identity -> Users -> your user -> "
-                 "API keys -> Add API key -> paste public key.")
+        steps = (
+            "Upload the public key in the OCI console: Identity -> Users -> your user -> "
+            "API keys -> Add API key -> paste public key."
+        )
         output = "\n".join(p for p in (pub_pem.strip(), steps, f"Fingerprint: {fingerprint}") if p)
-        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", name],
-                                 timeout=API_CHECK_TIMEOUT)
+        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", name], timeout=API_CHECK_TIMEOUT)
         if rc == 0:
             return LoginResult(ok=True, message=f"logged in as profile {name}", output=output)
         if rc == 124 or not _is_auth_failure(err + out):
-            why = (f"could not reach OCI (timed out after {API_CHECK_TIMEOUT}s)" if rc == 124
-                   else f"verification failed ({self._last_line(err, out) or 'unknown error'})")
-            msg = (f"profile {name} was saved but {why}. If you have not uploaded the public key yet, "
-                   f"add it in the OCI console (fingerprint {fingerprint}); then use Refresh or log in again.")
+            why = (
+                f"could not reach OCI (timed out after {API_CHECK_TIMEOUT}s)"
+                if rc == 124
+                else f"verification failed ({self._last_line(err, out) or 'unknown error'})"
+            )
+            msg = (
+                f"profile {name} was saved but {why}. If you have not uploaded the public key yet, "
+                f"add it in the OCI console (fingerprint {fingerprint}); then use Refresh or log in again."
+            )
         else:
-            msg = (f"profile {name} was saved but OCI rejected the key. Upload the public key in the "
-                   f"OCI console (Identity -> Users -> your user -> API keys -> Add API key), "
-                   f"fingerprint {fingerprint}, then use Refresh or log in again.")
+            msg = (
+                f"profile {name} was saved but OCI rejected the key. Upload the public key in the "
+                f"OCI console (Identity -> Users -> your user -> API keys -> Add API key), "
+                f"fingerprint {fingerprint}, then use Refresh or log in again."
+            )
         return LoginResult(ok=False, message=msg, output=output)
 
     def logout(self, profile: str | None = None) -> LoginResult:
@@ -281,9 +316,13 @@ class OCIProvider(Provider):
         if not target or target not in cfg:
             return LoginResult(ok=False, message="no OCI profile to log out of")
         if not cfg[target].get("security_token_file"):
-            return LoginResult(ok=False, message=(
-                f"profile {target} uses an API key, not a session; logout only applies to session "
-                "profiles. Remove the profile from ~/.oci/config to forget it."))
+            return LoginResult(
+                ok=False,
+                message=(
+                    f"profile {target} uses an API key, not a session; logout only applies to session "
+                    "profiles. Remove the profile from ~/.oci/config to forget it."
+                ),
+            )
         rc, out, err = self._run(["oci", "session", "terminate", "--profile", target], timeout=30)
         if rc == 0:
             return LoginResult(ok=True, message=f"terminated OCI session {target}")
@@ -333,9 +372,25 @@ class OCIProvider(Provider):
         if hit and _clock() - hit[0] < COMPARTMENT_CACHE_TTL:
             return list(hit[1])
         rc, out, _err = self._run(
-            ["oci", "iam", "compartment", "list", "--compartment-id", tenancy,
-             "--compartment-id-in-subtree", "true", "--all", "--lifecycle-state", "ACTIVE",
-             "--output", "json", "--profile", profile], timeout=60)
+            [
+                "oci",
+                "iam",
+                "compartment",
+                "list",
+                "--compartment-id",
+                tenancy,
+                "--compartment-id-in-subtree",
+                "true",
+                "--all",
+                "--lifecycle-state",
+                "ACTIVE",
+                "--output",
+                "json",
+                "--profile",
+                profile,
+            ],
+            timeout=60,
+        )
         if rc != 0:
             return []
         try:

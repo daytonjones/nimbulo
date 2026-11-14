@@ -19,8 +19,13 @@ def cfg(tmp_path, monkeypatch):
 
 def _add(name, **kw):
     oci_config.write_api_key_profile(
-        name, user=UOCID, tenancy=TOCID, region="us-ashburn-1",
-        key_file="/k.pem", fingerprint="aa:bb", **kw,
+        name,
+        user=UOCID,
+        tenancy=TOCID,
+        region="us-ashburn-1",
+        key_file="/k.pem",
+        fingerprint="aa:bb",
+        **kw,
     )
 
 
@@ -88,7 +93,7 @@ def test_add_profile_preserves_bytes(cfg):
     _add("DEV")
     out = cfg.read_text()
     assert out.startswith(MESSY)
-    assert out[len(MESSY):].startswith("\n[DEV]\n")
+    assert out[len(MESSY) :].startswith("\n[DEV]\n")
 
 
 def test_overwrite_replaces_only_that_section(cfg):
@@ -97,7 +102,7 @@ def test_overwrite_replaces_only_that_section(cfg):
     _add("PROD", overwrite=True)
     out = cfg.read_text()
     head = MESSY[: MESSY.index("[PROD]")]
-    tail = MESSY[MESSY.index("[OTHER]"):]
+    tail = MESSY[MESSY.index("[OTHER]") :]
     assert out.startswith(head) and out.endswith(tail)
     assert "\n\n\n[OTHER]" in out
     assert oci_config.read_profiles()["PROD"]["user"] == UOCID
@@ -109,7 +114,7 @@ def test_overwrite_default(cfg):
     _add("DEFAULT", overwrite=True)
     out = cfg.read_text()
     assert out.startswith("# my creds\n[DEFAULT]\nuser=" + UOCID)
-    assert out.endswith(MESSY[MESSY.index("# prod below"):])
+    assert out.endswith(MESSY[MESSY.index("# prod below") :])
 
 
 def test_no_trailing_newline(cfg):

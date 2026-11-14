@@ -17,6 +17,7 @@ TOCID = "ocid1.tenancy.oc1..bbbb"
 def _jwt(exp):
     def b(d):
         return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+
     return f"{b({'alg': 'RS256'})}.{b({'exp': exp})}.c2ln"
 
 
@@ -38,16 +39,14 @@ def _session_cfg(env, exp, name="SESS"):
         tok.write_text(_jwt(exp))
     _write_config(
         env,
-        f"[{name}]\nregion=eu-frankfurt-1\ntenancy={TOCID}\n"
-        f"security_token_file={tok}\nkey_file={env}/k.pem\n",
+        f"[{name}]\nregion=eu-frankfurt-1\ntenancy={TOCID}\nsecurity_token_file={tok}\nkey_file={env}/k.pem\n",
     )
 
 
 def _apikey_cfg(env, name="API"):
     _write_config(
         env,
-        f"[{name}]\nuser={UOCID}\ntenancy={TOCID}\nregion=us-ashburn-1\n"
-        f"fingerprint=aa:bb\nkey_file={env}/k.pem\n",
+        f"[{name}]\nuser={UOCID}\ntenancy={TOCID}\nregion=us-ashburn-1\nfingerprint=aa:bb\nkey_file={env}/k.pem\n",
     )
 
 
@@ -76,7 +75,8 @@ def test_status_session_valid_with_permissions_warning(fake_run, env):
     _session_cfg(env, int(time.time()) + 3600)
     fake_run.add(
         ["oci", "session", "validate", "--profile", "SESS", "--local"],
-        rc=0, err="WARNING: Permissions on /x/k.pem are too open.",
+        rc=0,
+        err="WARNING: Permissions on /x/k.pem are too open.",
     )
     st = OCIProvider().status()
     assert st.state == AuthState.AUTHENTICATED
@@ -121,8 +121,11 @@ def test_status_api_key_offline_is_error(fake_run, env):
 
 def test_status_api_key_auth_failure(fake_run, env):
     _apikey_cfg(env)
-    fake_run.add(["oci", "iam", "region", "list", "--profile", "API"], rc=1,
-                 err='ServiceError: {"code": "NotAuthenticated", "status": 401}')
+    fake_run.add(
+        ["oci", "iam", "region", "list", "--profile", "API"],
+        rc=1,
+        err='ServiceError: {"code": "NotAuthenticated", "status": 401}',
+    )
     assert OCIProvider().status().state == AuthState.UNAUTHENTICATED
 
 
@@ -137,8 +140,11 @@ def test_status_profile_selection(fake_run, env):
 
 
 def test_login_session_runs_authenticate(fake_run, env):
-    fake_run.add(["oci", "session", "authenticate", "--profile-name", "P", "--region", "eu-paris-1"],
-                 rc=0, out="Opening browser\nDone")
+    fake_run.add(
+        ["oci", "session", "authenticate", "--profile-name", "P", "--region", "eu-paris-1"],
+        rc=0,
+        out="Opening browser\nDone",
+    )
     lines = []
     res = OCIProvider().login("session", on_output=lines.append, profile="P", region="eu-paris-1")
     assert res.ok

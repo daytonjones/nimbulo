@@ -32,20 +32,40 @@ def test_cli_status_includes_oci(env, fake_run):
 
 
 def test_cli_login_oci_session(env, fake_run):
-    fake_run.add(["oci", "session", "authenticate", "--profile-name", "my-profile",
-                  "--region", "us-ashburn-1"], rc=0, out="Config written")
-    result = runner.invoke(app, ["login", "oci", "-m", "session", "--profile", "my-profile",
-                                 "--region", "us-ashburn-1"])
+    fake_run.add(
+        ["oci", "session", "authenticate", "--profile-name", "my-profile", "--region", "us-ashburn-1"],
+        rc=0,
+        out="Config written",
+    )
+    result = runner.invoke(
+        app, ["login", "oci", "-m", "session", "--profile", "my-profile", "--region", "us-ashburn-1"]
+    )
     assert result.exit_code == 0, result.output
-    assert fake_run.streamed == [["oci", "session", "authenticate", "--profile-name",
-                                  "my-profile", "--region", "us-ashburn-1"]]
+    assert fake_run.streamed == [
+        ["oci", "session", "authenticate", "--profile-name", "my-profile", "--region", "us-ashburn-1"]
+    ]
 
 
 def test_cli_login_oci_api_key_flags(env, fake_run):
     fake_run.add(["oci", "iam", "region", "list", "--profile", "ci"], rc=0, out="{}")
-    result = runner.invoke(app, [
-        "login", "oci", "-m", "api-key", "--profile", "ci", "--user", U, "--tenancy", T,
-        "--region", "us-ashburn-1", "--generate-key"])
+    result = runner.invoke(
+        app,
+        [
+            "login",
+            "oci",
+            "-m",
+            "api-key",
+            "--profile",
+            "ci",
+            "--user",
+            U,
+            "--tenancy",
+            T,
+            "--region",
+            "us-ashburn-1",
+            "--generate-key",
+        ],
+    )
     assert result.exit_code == 0, result.output
     assert "BEGIN PUBLIC KEY" in result.output
     assert "Add API key" in result.output
@@ -62,15 +82,34 @@ def test_cli_login_oci_api_key_prompts_missing(env, fake_run):
 
 
 def test_cli_login_oci_failure_exit_and_no_markup(env, fake_run):
-    result = runner.invoke(app, ["login", "oci", "-m", "api-key", "--profile", "x", "--user", "bad",
-                                 "--tenancy", T, "--region", "[bold]", "--generate-key"])
+    result = runner.invoke(
+        app,
+        [
+            "login",
+            "oci",
+            "-m",
+            "api-key",
+            "--profile",
+            "x",
+            "--user",
+            "bad",
+            "--tenancy",
+            T,
+            "--region",
+            "[bold]",
+            "--generate-key",
+        ],
+    )
     assert result.exit_code == 1
 
 
 def test_cli_compartments_and_set_compartment(env, fake_run):
     (env / "config").write_text(f"[P1]\ntenancy={T}\nregion=us-ashburn-1\n")
-    fake_run.add(["oci", "iam", "compartment", "list"], rc=0, out=json.dumps(
-        {"data": [{"id": DEV, "name": "dev", "compartment-id": T, "lifecycle-state": "ACTIVE"}]}))
+    fake_run.add(
+        ["oci", "iam", "compartment", "list"],
+        rc=0,
+        out=json.dumps({"data": [{"id": DEV, "name": "dev", "compartment-id": T, "lifecycle-state": "ACTIVE"}]}),
+    )
     result = runner.invoke(app, ["compartments"])
     assert result.exit_code == 0, result.output
     assert DEV in result.output.replace("\n", "")

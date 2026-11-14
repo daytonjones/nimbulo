@@ -3,6 +3,7 @@
 No OCI SDK and no extra runtime dependency: key generation shells out to
 ``openssl``. Private key material is never logged or returned, only its path.
 """
+
 from __future__ import annotations
 
 import configparser
@@ -17,16 +18,44 @@ from pathlib import Path
 OCI_CONFIG_PATH: Path = Path(os.path.expanduser("~/.oci/config"))
 
 KNOWN_REGIONS: tuple[str, ...] = (
-    "us-ashburn-1", "us-phoenix-1", "us-sanjose-1", "us-chicago-1",
-    "ca-toronto-1", "ca-montreal-1",
-    "sa-saopaulo-1", "sa-vinhedo-1", "sa-santiago-1", "sa-bogota-1", "mx-queretaro-1", "mx-monterrey-1",
-    "eu-frankfurt-1", "eu-amsterdam-1", "eu-zurich-1", "eu-marseille-1", "eu-milan-1",
-    "eu-stockholm-1", "eu-paris-1", "eu-madrid-1", "eu-madrid-3",
-    "uk-london-1", "uk-cardiff-1",
-    "ap-tokyo-1", "ap-osaka-1", "ap-seoul-1", "ap-chuncheon-1", "ap-mumbai-1",
-    "ap-hyderabad-1", "ap-sydney-1", "ap-melbourne-1", "ap-singapore-1", "ap-singapore-2",
-    "me-jeddah-1", "me-dubai-1", "me-abudhabi-1",
-    "af-johannesburg-1", "il-jerusalem-1",
+    "us-ashburn-1",
+    "us-phoenix-1",
+    "us-sanjose-1",
+    "us-chicago-1",
+    "ca-toronto-1",
+    "ca-montreal-1",
+    "sa-saopaulo-1",
+    "sa-vinhedo-1",
+    "sa-santiago-1",
+    "sa-bogota-1",
+    "mx-queretaro-1",
+    "mx-monterrey-1",
+    "eu-frankfurt-1",
+    "eu-amsterdam-1",
+    "eu-zurich-1",
+    "eu-marseille-1",
+    "eu-milan-1",
+    "eu-stockholm-1",
+    "eu-paris-1",
+    "eu-madrid-1",
+    "eu-madrid-3",
+    "uk-london-1",
+    "uk-cardiff-1",
+    "ap-tokyo-1",
+    "ap-osaka-1",
+    "ap-seoul-1",
+    "ap-chuncheon-1",
+    "ap-mumbai-1",
+    "ap-hyderabad-1",
+    "ap-sydney-1",
+    "ap-melbourne-1",
+    "ap-singapore-1",
+    "ap-singapore-2",
+    "me-jeddah-1",
+    "me-dubai-1",
+    "me-abudhabi-1",
+    "af-johannesburg-1",
+    "il-jerusalem-1",
 )
 
 OPENSSL_TIMEOUT = 30
@@ -94,11 +123,7 @@ def write_api_key_profile(
         with open(OCI_CONFIG_PATH, encoding="utf-8", newline="") as f:
             text = f.read()
     lines = text.splitlines(keepends=True)
-    headers = [
-        (i, m.group(1).strip())
-        for i, line in enumerate(lines)
-        if (m := _HEADER_RE.match(line))
-    ]
+    headers = [(i, m.group(1).strip()) for i, line in enumerate(lines) if (m := _HEADER_RE.match(line))]
     block = f"[{name}]\n" + "".join(f"{k}={v}\n" for k, v in values.items())
     pos = next((n for n, (_, h) in enumerate(headers) if h == name), None)
     if pos is not None:
@@ -132,16 +157,13 @@ def validate_ocid(value: str, kind: str) -> bool:
 def _openssl() -> str:
     exe = shutil.which("openssl")
     if not exe:
-        raise RuntimeError(
-            "openssl was not found on PATH; install it to generate an OCI API signing key."
-        )
+        raise RuntimeError("openssl was not found on PATH; install it to generate an OCI API signing key.")
     return exe
 
 
 def _run(args: list[str], data: bytes | None = None) -> bytes:
     try:
-        r = subprocess.run(args, input=data, capture_output=True, check=True,
-                           timeout=OPENSSL_TIMEOUT)
+        r = subprocess.run(args, input=data, capture_output=True, check=True, timeout=OPENSSL_TIMEOUT)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"openssl timed out after {OPENSSL_TIMEOUT}s") from None
     except subprocess.CalledProcessError as e:

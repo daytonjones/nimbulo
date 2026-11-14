@@ -1,4 +1,5 @@
 """Textual pilot tests for the OCI api-key form. No real ~/.oci, CLI or network is touched."""
+
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +20,8 @@ FORM_IDS = ["oci-profile", "oci-user", "oci-tenancy", "oci-region", "oci-keyfile
 def isolated(monkeypatch):
     monkeypatch.setattr(tui.ProviderPane, "refresh_status", lambda self: None)
     monkeypatch.setattr(
-        OCIProvider, "api_key_defaults",
+        OCIProvider,
+        "api_key_defaults",
         lambda self: {"profile": "my-profile", "region": "eu-frankfurt-1", "key_dir": "/nonexistent/keys"},
     )
     calls: list[dict] = []
@@ -111,9 +113,17 @@ def test_invalid_ocid_shows_message_without_calling_login(isolated):
             assert "key file" in str(app.query_one("#oci-msg", Static).render())
             # "both" is unreachable from the UI (generate disables the key-file input); the
             # validator itself still rejects it
-            assert "exactly one" in tui.validate_oci_form({
-                "profile": "p", "user": USER, "tenancy": TENANCY, "region": "us-ashburn-1",
-                "key_file": "/k.pem", "generate_key": True, "overwrite": False})
+            assert "exactly one" in tui.validate_oci_form(
+                {
+                    "profile": "p",
+                    "user": USER,
+                    "tenancy": TENANCY,
+                    "region": "us-ashburn-1",
+                    "key_file": "/k.pem",
+                    "generate_key": True,
+                    "overwrite": False,
+                }
+            )
             # bad profile name
             app.query_one("#oci-generate", Checkbox).value = False
             app.query_one("#oci-profile", Input).value = "bad name/.."
@@ -146,10 +156,18 @@ def test_submit_calls_login_with_kwargs(isolated):
             assert app.query_one("#oci-profile", Input).value == "work"  # values kept
 
     run(go())
-    assert isolated == [{
-        "method": "api-key", "profile": "work", "user": USER, "tenancy": TENANCY,
-        "region": "us-ashburn-1", "key_file": None, "generate_key": True, "overwrite": True,
-    }]
+    assert isolated == [
+        {
+            "method": "api-key",
+            "profile": "work",
+            "user": USER,
+            "tenancy": TENANCY,
+            "region": "us-ashburn-1",
+            "key_file": None,
+            "generate_key": True,
+            "overwrite": True,
+        }
+    ]
 
 
 def test_enter_in_last_field_submits(isolated):
@@ -186,6 +204,7 @@ def test_session_method_uses_existing_login(isolated):
 def test_markup_in_status_does_not_crash():
     async def go():
         from cloud_login.models import AuthState, ProviderStatus
+
         app = tui.CloudLoginTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             pane = app._panes["oci"]

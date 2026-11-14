@@ -22,6 +22,7 @@ Usage::
   CLI; set ``fake_run.installed = False`` to simulate it missing. Other tools
   resolve normally.
 """
+
 from __future__ import annotations
 
 import shutil
