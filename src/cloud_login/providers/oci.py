@@ -8,6 +8,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,7 +21,20 @@ from .base import OutputCb, Provider
 
 DEFAULT_REGION = "us-ashburn-1"
 API_CHECK_TIMEOUT = 15
-_AUTH_FAIL_MARKERS = ("notauthenticated", "401", "invalidkey", "not authenticated")
+_AUTH_FAIL_MARKERS = ("notauthenticated", "invalidkey", "not authenticated")
+# A bare "401" would match request ids / OCIDs; require the JSON status field.
+_STATUS_401 = re.compile(r'"status"\s*:\s*401\b')
+COMPARTMENT_CACHE_TTL = 60
+ROOT_LABEL = "root"  # display name of the tenancy root compartment
+
+# (profile -> (fetched_at, listing)); module-level so separate provider instances share it.
+_compartment_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
+_clock = time.monotonic  # monkeypatchable in tests
+
+
+def _is_auth_failure(text: str) -> bool:
+    low = text.lower()
+    return any(m in low for m in _AUTH_FAIL_MARKERS) or bool(_STATUS_401.search(low))
 _API_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file")
 
 
@@ -33,9 +48,12 @@ def _token_expiry(path: str) -> tuple[datetime | None, str]:
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
-        exp = json.loads(base64.urlsafe_b64decode(payload))["exp"]
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        exp = claims["exp"]
+        if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+            raise TypeError("exp is not numeric")
         return datetime.fromtimestamp(int(exp), timezone.utc), ""
-    except (IndexError, ValueError, KeyError, TypeError, OSError):
+    except (IndexError, ValueError, KeyError, TypeError, OSError, OverflowError):
         return None, f"security token file is not a valid token: {p}"
 
 
@@ -113,7 +131,7 @@ class OCIProvider(Provider):
         msg = self._last_line(err, out) or "OCI check failed"
         if rc == 124:
             state, msg = AuthState.ERROR, f"could not reach OCI (timed out after {API_CHECK_TIMEOUT}s)"
-        elif any(m in (err + out).lower() for m in _AUTH_FAIL_MARKERS):
+        elif _is_auth_failure(err + out):
             state = AuthState.UNAUTHENTICATED
         else:
             state = AuthState.ERROR
@@ -163,3 +181,74 @@ class OCIProvider(Provider):
         if rc == 0:
             return LoginResult(ok=True, message=f"terminated OCI session {target}")
         return LoginResult(ok=False, message=self._last_line(err, out) or "logout failed")
+
+    # --- compartments --------------------------------------------------------
+
+    def _profile_for_compartments(self) -> tuple[str | None, str | None]:
+        """Return (active profile, its tenancy OCID)."""
+        cfg = oci_config.read_profiles()
+        target = self._pick_profile(None, cfg)
+        return target, (cfg.get(target, {}).get("tenancy") if target else None)
+
+    @staticmethod
+    def _build_paths(tenancy: str, items: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        """Display paths from parent links. The tenancy root is shown as ``root`` and
+        prefixes every path (``root/dev/team-a``). Missing parents make the node
+        top-level; cycles are cut instead of looped on."""
+        by_id = {i["id"]: i for i in items if isinstance(i, dict) and i.get("id")}
+        out = [(tenancy, ROOT_LABEL)]
+        for cid in by_id:
+            if cid == tenancy:
+                continue
+            parts: list[str] = []
+            seen: set[str] = set()
+            cur: str | None = cid
+            while cur and cur in by_id and cur not in seen:
+                seen.add(cur)
+                parts.append(str(by_id[cur].get("name") or cur))
+                cur = by_id[cur].get("compartment-id")
+            if cur == tenancy:
+                parts.append(ROOT_LABEL)
+            out.append((cid, "/".join(reversed(parts))))
+        return sorted(out, key=lambda t: (t[1] != ROOT_LABEL, t[1]))
+
+    def list_secondary(self) -> list[tuple[str, str]]:
+        profile, tenancy = self._profile_for_compartments()
+        if not profile or not tenancy:
+            return []
+        hit = _compartment_cache.get(profile)
+        if hit and _clock() - hit[0] < COMPARTMENT_CACHE_TTL:
+            return list(hit[1])
+        rc, out, _err = self._run(
+            ["oci", "iam", "compartment", "list", "--compartment-id", tenancy,
+             "--compartment-id-in-subtree", "true", "--all", "--lifecycle-state", "ACTIVE",
+             "--output", "json", "--profile", profile], timeout=60)
+        if rc != 0:
+            return []
+        try:
+            data = json.loads(out)["data"]
+            if not isinstance(data, list):
+                return []
+            result = self._build_paths(tenancy, data)
+        except (ValueError, KeyError, TypeError):
+            return []
+        _compartment_cache[profile] = (_clock(), result)
+        key = f"oci.compartment.{profile}"
+        saved = settings.get(key)
+        if saved and saved not in {cid for cid, _ in result}:
+            settings.delete(key)  # stale: compartment gone or no longer ACTIVE
+        return list(result)
+
+    def set_secondary(self, sid: str) -> LoginResult:
+        profile, _ = self._profile_for_compartments()
+        if not profile:
+            return LoginResult(ok=False, message="no OCI profile selected")
+        settings.set(f"oci.compartment.{profile}", sid)
+        return LoginResult(ok=True, message=f"compartment set for profile {profile}")
+
+    def active_compartment(self, profile: str | None = None) -> str | None:
+        if profile is None:
+            profile, _ = self._profile_for_compartments()
+        if not profile:
+            return None
+        return settings.get(f"oci.compartment.{profile}") or None
