@@ -28,6 +28,7 @@ from .. import providers
 from ..models import AuthState, ProviderStatus, Urgency, format_expires
 from ..providers import oci_config
 from ..providers.base import Provider
+from .oci_form import validate_oci_form  # noqa: F401 (re-exported)
 
 
 def _badge(state: AuthState) -> str:
@@ -40,28 +41,6 @@ def _badge(state: AuthState) -> str:
         AuthState.UNKNOWN: "white",
     }[state]
     return f"[{color}]●[/] {state.value}"
-
-
-_OCI_PROFILE_RE = re.compile(r"[A-Za-z0-9_.@-]+")
-
-
-def validate_oci_form(v: dict) -> Optional[str]:
-    """Return the first problem with the OCI api-key form values, or None. Plain text, not markup."""
-    name = v["profile"]
-    if not _OCI_PROFILE_RE.fullmatch(name) or name in (".", ".."):
-        return "profile name may only contain letters, digits and . _ @ - (and must not be '.' or '..')"
-    if not oci_config.validate_ocid(v["user"], "user"):
-        return "user OCID is not valid (expected ocid1.user.<realm>..<id>)"
-    if not oci_config.validate_ocid(v["tenancy"], "tenancy"):
-        return "tenancy OCID is not valid (expected ocid1.tenancy.<realm>..<id>)"
-    region = v["region"]
-    if region not in oci_config.KNOWN_REGIONS:
-        near = difflib.get_close_matches(region, oci_config.KNOWN_REGIONS, n=3, cutoff=0.6)
-        hint = f"; did you mean {', '.join(near)}?" if near else ""
-        return f"unknown region {region!r}{hint}"
-    if bool(v["key_file"]) == bool(v["generate_key"]):
-        return "choose exactly one: supply an existing key file or generate a new key pair"
-    return None
 
 
 class ProviderPane(Vertical):

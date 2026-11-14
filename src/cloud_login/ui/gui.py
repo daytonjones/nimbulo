@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import inspect
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -11,9 +13,12 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QCompleter,
+    QFileDialog,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -33,7 +38,9 @@ from PySide6.QtWidgets import (
 
 from .. import providers, settings
 from ..models import AuthState, LoginResult, ProviderStatus, Urgency, format_expires
+from ..providers import oci_config
 from ..providers.base import Provider
+from .oci_form import validate_oci_form
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +232,14 @@ class ProviderTab(QWidget):
         # First refresh uses the saved profile from last session, if any.
         self._initial_profile: str | None = settings.get(f"last_profile.{provider.key}")
         self._initial_secondary: str | None = settings.get(f"last_secondary.{provider.key}")
+        # OCI-only widgets (None for every other provider)
+        self.oci_form: QGroupBox | None = None
+        self.oci_fields: dict[str, Any] = {}
+        self.oci_browse_btn: QPushButton | None = None
+        self.oci_msg: QLabel | None = None
+        self.oci_hint: QLabel | None = None
+        self.copy_pubkey_btn: QPushButton | None = None
+        self._pubkey_pem: str | None = None
         self._build()
         self.refresh_status()
 
@@ -364,6 +379,12 @@ class ProviderTab(QWidget):
             cred_layout.addWidget(self.reveal_btn)
             outer.addWidget(cred_box)
 
+        if self.provider.key == "oci":
+            outer.addWidget(self._build_oci_form())
+            if self.method_combo is not None:
+                self.method_combo.currentIndexChanged.connect(self._sync_oci_form)
+            self._sync_oci_form()
+
         # --- action buttons ---
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
@@ -377,6 +398,12 @@ class ProviderTab(QWidget):
         self.login_btn.clicked.connect(self.do_login)
         btn_row.addWidget(self.login_btn)
 
+        if self.provider.key == "oci":
+            self.copy_pubkey_btn = QPushButton("Copy public key")
+            self.copy_pubkey_btn.clicked.connect(self._copy_pubkey)
+            self.copy_pubkey_btn.hide()  # only after a key pair was generated
+            btn_row.addWidget(self.copy_pubkey_btn)
+
         if self.provider.key in {"vultr", "digitalocean"}:
             self.logout_btn = QPushButton("🗑  Forget Key")
         else:
@@ -386,6 +413,138 @@ class ProviderTab(QWidget):
         outer.addLayout(btn_row)
 
         outer.addStretch()
+
+    # --- OCI api-key form (oci only) --------------------------------------
+
+    def _build_oci_form(self) -> QGroupBox:
+        try:
+            defaults = self.provider.api_key_defaults()
+        except Exception:  # noqa: BLE001
+            defaults = {}
+        box = QGroupBox("API key")
+        self.oci_form = box
+        grid = QGridLayout(box)
+        grid.setContentsMargins(14, 14, 14, 10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+
+        profile = QLineEdit(defaults.get("profile", ""))
+        profile.setPlaceholderText("profile name")
+        region = QComboBox()
+        region.setEditable(True)
+        region.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        region.addItems(list(oci_config.KNOWN_REGIONS))
+        region.setCurrentText(defaults.get("region", ""))
+        region.lineEdit().setPlaceholderText("region (us-ashburn-1)")
+        completer = region.completer()
+        if completer is not None:
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        user = QLineEdit()
+        user.setPlaceholderText("ocid1.user.oc1..…")
+        tenancy = QLineEdit()
+        tenancy.setPlaceholderText("ocid1.tenancy.oc1..…")
+        key_file = QLineEdit()
+        key_file.setPlaceholderText("existing private key file (.pem)")
+        self.oci_browse_btn = QPushButton("Browse…")
+        self.oci_browse_btn.clicked.connect(self._browse_key_file)
+        generate = QCheckBox("Generate a new key pair")
+        overwrite = QCheckBox("Overwrite existing profile")
+        self.oci_fields = {
+            "profile": profile, "user": user, "tenancy": tenancy, "region": region,
+            "key_file": key_file, "generate": generate, "overwrite": overwrite,
+        }
+        for w, tip in ((profile, "Profile name"), (region, "Region"), (user, "User OCID"),
+                       (tenancy, "Tenancy OCID"), (key_file, "Private key file")):
+            w.setToolTip(tip)
+        grid.addWidget(profile, 0, 0)
+        grid.addWidget(region, 0, 1, 1, 2)
+        grid.addWidget(user, 1, 0, 1, 3)
+        grid.addWidget(tenancy, 2, 0, 1, 3)
+        grid.addWidget(key_file, 3, 0, 1, 2)
+        grid.addWidget(self.oci_browse_btn, 3, 2)
+        grid.addWidget(generate, 4, 0)
+        grid.addWidget(overwrite, 4, 1, 1, 2)
+        self.oci_msg = QLabel("")
+        self.oci_msg.setTextFormat(Qt.TextFormat.PlainText)
+        self.oci_msg.setWordWrap(True)
+        self.oci_msg.setStyleSheet("color: #E74C3C;")
+        grid.addWidget(self.oci_msg, 5, 0, 1, 3)
+        self.oci_hint = QLabel("")
+        self.oci_hint.setTextFormat(Qt.TextFormat.PlainText)
+        self.oci_hint.setWordWrap(True)
+        self.oci_hint.hide()
+        grid.addWidget(self.oci_hint, 6, 0, 1, 3)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        generate.toggled.connect(self._oci_generate_toggled)
+        # Enter moves to the next field; Enter in the last one submits.
+        profile.returnPressed.connect(user.setFocus)
+        user.returnPressed.connect(tenancy.setFocus)
+        tenancy.returnPressed.connect(region.setFocus)
+        region.lineEdit().returnPressed.connect(self._oci_region_enter)
+        key_file.returnPressed.connect(self.do_login)
+        for a, b in ((profile, region), (region, user), (user, tenancy), (tenancy, generate),
+                     (generate, key_file), (key_file, self.oci_browse_btn), (self.oci_browse_btn, overwrite)):
+            QWidget.setTabOrder(a, b)
+        return box
+
+    def _oci_region_enter(self) -> None:
+        if self.oci_fields["generate"].isChecked():
+            self.do_login()
+        else:
+            self.oci_fields["key_file"].setFocus()
+
+    def _oci_generate_toggled(self, checked: bool) -> None:
+        self.oci_fields["key_file"].setEnabled(not checked)
+        if self.oci_browse_btn is not None:
+            self.oci_browse_btn.setEnabled(not checked)
+
+    def _browse_key_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select OCI private key", str(Path.home()), "PEM keys (*.pem);;All files (*)"
+        )
+        if path:
+            self.oci_fields["key_file"].setText(path)
+
+    @Slot()
+    def _sync_oci_form(self) -> None:
+        if self.oci_form is not None:
+            self.oci_form.setVisible(self._selected_method() == "api-key")
+
+    def oci_form_values(self) -> dict[str, Any]:
+        f = self.oci_fields
+        generate = f["generate"].isChecked()
+        return {
+            "profile": f["profile"].text().strip(),
+            "user": f["user"].text().strip(),
+            "tenancy": f["tenancy"].text().strip(),
+            "region": f["region"].currentText().strip(),
+            "key_file": None if generate else (f["key_file"].text().strip() or None),
+            "generate_key": generate,
+            "overwrite": f["overwrite"].isChecked(),
+        }
+
+    def _copy_pubkey(self) -> None:
+        if self._pubkey_pem:
+            QApplication.clipboard().setText(self._pubkey_pem)
+            self._log("public key copied to clipboard")
+
+    def _show_oci_result(self, result: LoginResult) -> None:
+        """After an api-key login: stream the output to the log, offer copy + instructions."""
+        out = result.output or ""
+        for line in out.splitlines():
+            if line.strip():
+                self._log(line)
+        m = re.search(r"-----BEGIN PUBLIC KEY-----.*?-----END PUBLIC KEY-----", out, re.DOTALL)
+        self._pubkey_pem = m.group(0) if m else None
+        if self.copy_pubkey_btn is not None:
+            self.copy_pubkey_btn.setVisible(self._pubkey_pem is not None)
+        if self.oci_hint is not None:
+            hint = (out.replace(m.group(0), "") if m else out).strip()
+            self.oci_hint.setText(hint)  # PlainText label, no markup interpretation
+            self.oci_hint.setVisible(bool(hint))
 
     # --- threading helper -------------------------------------------------
 
@@ -495,13 +654,16 @@ class ProviderTab(QWidget):
         self._set_badge(s.state)
         self._set_strip(s.state)
         ident = s.identity
+        # OCI-derived text (OCIDs, CLI stderr) goes into a RichText label: escape it.
+        # Other providers keep their existing rendering unchanged.
+        esc = html.escape if self.provider.key == "oci" else (lambda x: x)
         details: list[str] = []
         if ident:
             if ident.user:
-                details.append(f"<b>User:</b> {ident.user}")
+                details.append(f"<b>User:</b> {esc(ident.user)}")
             if ident.account:
                 label = self.provider.secondary_label or "Account"
-                details.append(f"<b>{label}:</b> {ident.account}")
+                details.append(f"<b>{label}:</b> {esc(ident.account)}")
             if ident.expires_at:
                 exp_label, urg = format_expires(ident.expires_at)
                 color = {
@@ -513,9 +675,9 @@ class ProviderTab(QWidget):
                     f'<b>Expires:</b> <span style="color:{color}; font-weight:600;">{exp_label}</span>'
                 )
         if s.active_profile:
-            details.append(f"<b>Active:</b> {s.active_profile}")
+            details.append(f"<b>Active:</b> {esc(s.active_profile)}")
         if s.message:
-            details.append(f'<span style="color:#8898A4;">{s.message}</span>')
+            details.append(f'<span style="color:#8898A4;">{esc(s.message)}</span>')
         self.detail_label.setText("<br/>".join(details) if details else "—")
 
         if self.profile_combo is not None:
@@ -637,6 +799,18 @@ class ProviderTab(QWidget):
                 kwargs["configuration"] = profile
         elif key == "azure":
             pass
+        elif key == "oci":
+            if method == "api-key":
+                values = self.oci_form_values()
+                problem = validate_oci_form(values)
+                self.oci_msg.setText(problem or "")
+                if problem:
+                    return
+                kwargs.update(values)
+            else:
+                profile = self._selected_profile()
+                if profile:
+                    kwargs["profile"] = profile
         elif key in {"vultr", "digitalocean"}:
             token = (self.token_edit.text() if self.token_edit else "").strip()
             if token:
@@ -651,6 +825,8 @@ class ProviderTab(QWidget):
     def _on_login_done(self, result: LoginResult) -> None:
         self.login_btn.setEnabled(True)
         self._log(("OK: " if result.ok else "FAIL: ") + result.message)
+        if self.provider.key == "oci" and self.oci_form is not None and self._selected_method() == "api-key":
+            self._show_oci_result(result)
         if self.token_edit is not None:
             self.token_edit.clear()
             if self.reveal_btn is not None and self.reveal_btn.isChecked():
