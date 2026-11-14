@@ -118,3 +118,60 @@ def test_api_key_defaults(env):
     (env / "config").write_text("[DEFAULT]\nregion=eu-paris-1\ntenancy=t\n")
     d = p.api_key_defaults()
     assert d["profile"] == "my-profile" and d["region"] == "eu-paris-1"
+
+
+def test_relative_key_file_stored_absolute(env, fake_run, monkeypatch):
+    _, _, _ = oci_config.generate_key_pair(env / "k", "x")
+    monkeypatch.chdir(env)
+    fake_run.add(["oci", "iam", "region", "list", "--profile", "mine"], rc=0)
+    res, _ = _login(env, generate_key=False, key_file="k/x.pem")
+    assert res.ok
+    stored = oci_config.read_profiles()["mine"]["key_file"]
+    assert stored.startswith("/") and stored == str((env / "k" / "x.pem").resolve())
+
+
+@pytest.mark.parametrize("bad", ["../../x", "a/b", "/tmp/x", "..", ".", "a\\b", "a..b/c"])
+def test_rejects_path_unsafe_profile(env, fake_run, bad):
+    res, _ = _login(env, profile=bad)
+    assert not res.ok and "profile" in res.message.lower()
+    _no_writes(env)
+
+
+@pytest.mark.parametrize("good", ["me@example.com", "a.b"])
+def test_accepts_realistic_profile_names(env, fake_run, good):
+    fake_run.add(["oci", "iam", "region", "list", "--profile", good], rc=0)
+    res, _ = _login(env, profile=good)
+    assert res.ok
+    assert (env / "keys" / f"{good}.pem").is_file()
+
+
+def test_failed_profile_write_removes_generated_keys(env, fake_run, monkeypatch):
+    real = oci_config.write_api_key_profile
+    monkeypatch.setattr(oci_config, "write_api_key_profile",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    res, _ = _login(env)
+    assert not res.ok
+    assert list((env / "keys").iterdir()) == []
+    monkeypatch.setattr(oci_config, "write_api_key_profile", real)
+    fake_run.add(["oci", "iam", "region", "list", "--profile", "mine"], rc=0)
+    assert _login(env)[0].ok
+
+
+def test_user_supplied_key_never_deleted_on_failure(env, fake_run, monkeypatch):
+    oci_config.generate_key_pair(env / "k", "x")
+    monkeypatch.setattr(oci_config, "write_api_key_profile",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    res, _ = _login(env, generate_key=False, key_file=str(env / "k" / "x.pem"))
+    assert not res.ok
+    assert (env / "k" / "x.pem").is_file() and (env / "k" / "x_public.pem").is_file()
+
+
+def test_generate_with_existing_key_files_guides_user(env, fake_run):
+    oci_config.generate_key_pair(env / "keys", "mine")
+    before = {p.name: p.read_bytes() for p in (env / "keys").iterdir()}
+    res, _ = _login(env, overwrite=True)
+    assert not res.ok
+    assert str(env / "keys" / "mine.pem") in res.message
+    assert "key_file" in res.message and "remove" in res.message.lower()
+    assert {p.name: p.read_bytes() for p in (env / "keys").iterdir()} == before
+    assert not (env / "config").exists()

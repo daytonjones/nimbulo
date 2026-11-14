@@ -38,6 +38,7 @@ _clock = time.monotonic  # monkeypatchable in tests
 def _is_auth_failure(text: str) -> bool:
     low = text.lower()
     return any(m in low for m in _AUTH_FAIL_MARKERS) or bool(_STATUS_401.search(low))
+_PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_.@-]+")
 _API_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file")
 
 
@@ -171,6 +172,14 @@ class OCIProvider(Provider):
             return self._api_key_login(on_output, **kwargs)
         return LoginResult(ok=False, message=f"unknown login method: {method}")
 
+    @staticmethod
+    def _discard(paths: list[Path]) -> None:
+        for p in paths:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
     def api_key_defaults(self) -> dict[str, str]:
         """Pre-fill values for the api-key login form."""
         cfg = oci_config.read_profiles()
@@ -192,8 +201,9 @@ class OCIProvider(Provider):
         generate = bool(kw.get("generate_key", False))
         overwrite = bool(kw.get("overwrite", False))
 
-        if not name or re.search(r"[\s\[\]]", name):
-            return fail("profile name must be non-empty and contain no whitespace, '[' or ']'")
+        if not _PROFILE_NAME_RE.fullmatch(name) or name in (".", ".."):
+            return fail("profile name may only contain letters, digits and . _ @ - "
+                        "(and must not be '.' or '..')")
         if not oci_config.validate_ocid(user, "user"):
             return fail("user OCID is not valid (expected ocid1.user.<realm>..<id>)")
         if not oci_config.validate_ocid(tenancy, "tenancy"):
@@ -205,30 +215,44 @@ class OCIProvider(Provider):
         if bool(key_file) == generate:
             return fail("choose exactly one: supply an existing key file or generate a new key pair")
         if key_file:
-            kp = Path(os.path.expanduser(str(key_file)))
+            kp = Path(str(key_file)).expanduser().resolve()
             if not kp.is_file():
                 return fail(f"key file not found: {kp}")
         if name in oci_config.read_profiles() and not overwrite:
             return fail(f"profile {name} already exists; enable overwrite to replace it")
 
         pub_pem = ""
+        generated: list[Path] = []  # only files this call created; removed on later failure
+        if generate:
+            existing = [p for p in (OCI_KEYS_DIR / f"{name}.pem", OCI_KEYS_DIR / f"{name}_public.pem")
+                        if p.exists()]
+            if existing:
+                return fail(f"key files already exist at {existing[0]}; pass key_file={existing[0]} "
+                            "to reuse them, or remove them to generate a new key pair "
+                            "(overwrite applies to the profile only)")
         try:
             if generate:
                 priv, pub, fingerprint = oci_config.generate_key_pair(OCI_KEYS_DIR, name)
+                generated = [priv, pub]
                 pub_pem = pub.read_text()
                 key_path = str(priv)
             else:
                 key_path = str(kp)
                 fingerprint = oci_config.fingerprint_for_key(kp)
-        except (RuntimeError, OSError) as exc:  # FileExistsError is an OSError
+        except FileExistsError as exc:
+            return fail(f"key files already exist: {exc}")
+        except (RuntimeError, OSError) as exc:
+            self._discard(generated)
             return fail(f"key setup failed: {exc}")
         try:
             oci_config.write_api_key_profile(
                 name, user=user, tenancy=tenancy, region=region,
                 key_file=key_path, fingerprint=fingerprint, overwrite=overwrite)
         except FileExistsError:
+            self._discard(generated)
             return fail(f"profile {name} already exists; enable overwrite to replace it")
         except (ValueError, OSError) as exc:
+            self._discard(generated)
             return fail(f"could not write OCI config: {exc}")
         if on_output:
             on_output(f"wrote profile {name}; verifying")

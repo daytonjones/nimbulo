@@ -29,6 +29,7 @@ KNOWN_REGIONS: tuple[str, ...] = (
     "af-johannesburg-1", "il-jerusalem-1",
 )
 
+OPENSSL_TIMEOUT = 30
 _HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*$")
 _OCID_PART = r"[A-Za-z0-9_-]+"
 
@@ -139,7 +140,10 @@ def _openssl() -> str:
 
 def _run(args: list[str], data: bytes | None = None) -> bytes:
     try:
-        r = subprocess.run(args, input=data, capture_output=True, check=True)
+        r = subprocess.run(args, input=data, capture_output=True, check=True,
+                           timeout=OPENSSL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"openssl timed out after {OPENSSL_TIMEOUT}s") from None
     except subprocess.CalledProcessError as e:
         # Do not include stdout (may hold key material); stderr only.
         raise RuntimeError(f"openssl failed: {e.stderr.decode(errors='replace').strip()}") from None

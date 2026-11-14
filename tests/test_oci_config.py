@@ -156,3 +156,16 @@ def test_generate_key_pair_refuses_existing_untouched(tmp_path):
         oci_config.generate_key_pair(tmp_path, "k")
     assert (tmp_path / "k.pem").read_text() == "precious"
     assert not (tmp_path / "k_public.pem").exists()
+
+
+def test_openssl_timeout_is_generic_error(monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        assert k.get("timeout")
+        raise subprocess.TimeoutExpired(a[0], k["timeout"], output=b"SECRET")
+
+    monkeypatch.setattr(oci_config.subprocess, "run", boom)
+    with pytest.raises(RuntimeError) as e:
+        oci_config._run(["openssl", "x"], b"k")
+    assert "timed out" in str(e.value) and "SECRET" not in str(e.value)
