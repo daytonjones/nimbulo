@@ -1,0 +1,378 @@
+from __future__ import annotations
+
+from typing import Optional
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    Log,
+    Select,
+    Static,
+    TabbedContent,
+    TabPane,
+)
+
+from .. import providers
+from ..models import AuthState, ProviderStatus, Urgency, format_expires
+from ..providers.base import Provider
+
+
+def _badge(state: AuthState) -> str:
+    color = {
+        AuthState.AUTHENTICATED: "green",
+        AuthState.EXPIRED: "yellow",
+        AuthState.UNAUTHENTICATED: "red",
+        AuthState.NOT_INSTALLED: "grey50",
+        AuthState.ERROR: "red",
+        AuthState.UNKNOWN: "white",
+    }[state]
+    return f"[{color}]●[/] {state.value}"
+
+
+class ProviderPane(Vertical):
+    """One tab's worth of UI for a single provider."""
+
+    def __init__(self, provider: Provider) -> None:
+        super().__init__()
+        self.provider = provider
+        self._status_widget: Static | None = None
+        self._profile_select: Select | None = None
+        self._method_select: Select | None = None
+        self._secondary_select: Select | None = None
+        self._token_input: Input | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id=f"status-{self.provider.key}", classes="status")
+
+        methods = self.provider.login_methods()
+        has_profile = self.provider.profile_label is not None
+        has_method_choice = len(methods) > 1
+        if has_profile or has_method_choice:
+            with Horizontal(classes="row"):
+                if has_profile:
+                    yield Label(f"{self.provider.profile_label}:")
+                    yield Select(
+                        options=[("(detecting…)", "")],
+                        id=f"profile-{self.provider.key}",
+                        allow_blank=True,
+                    )
+                if has_method_choice:
+                    yield Label("Method:")
+                    yield Select(
+                        options=[(m, m) for m in methods],
+                        value=methods[0],
+                        id=f"method-{self.provider.key}",
+                        allow_blank=False,
+                    )
+
+        if self.provider.secondary_label is not None:
+            with Horizontal(classes="row"):
+                yield Label(f"{self.provider.secondary_label}:")
+                yield Select(
+                    options=[("(none)", "")],
+                    id=f"secondary-{self.provider.key}",
+                    allow_blank=True,
+                )
+                yield Button(
+                    f"Set {self.provider.secondary_label}",
+                    id=f"setsec-{self.provider.key}",
+                    variant="default",
+                )
+                yield Button(
+                    "Refresh",
+                    id=f"refreshsec-{self.provider.key}",
+                    variant="default",
+                )
+
+        if self.provider.key in {"aws", "vultr", "digitalocean"}:
+            yield Input(
+                placeholder={
+                    "aws": "for `access-key`: AKID:SECRET   (otherwise leave blank)",
+                    "vultr": "Vultr API key (stored in macOS Keychain)",
+                    "digitalocean": "DigitalOcean token (stored in macOS Keychain)",
+                }[self.provider.key],
+                id=f"token-{self.provider.key}",
+                password=True,
+            )
+
+        with Horizontal(classes="row"):
+            yield Button("Refresh", id=f"refresh-{self.provider.key}", variant="default")
+            yield Button("Login / Re-auth", id=f"login-{self.provider.key}", variant="primary")
+            if self.provider.key in {"vultr", "digitalocean"}:
+                yield Button("Forget Key", id=f"forget-{self.provider.key}", variant="warning")
+            else:
+                yield Button("Logout", id=f"logout-{self.provider.key}", variant="warning")
+
+    def on_mount(self) -> None:
+        self._status_widget = self.query_one(f"#status-{self.provider.key}", Static)
+        for attr, css_id in [
+            ("_profile_select", f"#profile-{self.provider.key}"),
+            ("_method_select", f"#method-{self.provider.key}"),
+            ("_secondary_select", f"#secondary-{self.provider.key}"),
+            ("_token_input", f"#token-{self.provider.key}"),
+        ]:
+            try:
+                widget = self.query_one(css_id)
+            except Exception:
+                widget = None
+            setattr(self, attr, widget)
+        self.refresh_status()
+
+    # --- rendering --------------------------------------------------------
+
+    def render_status(self, s: ProviderStatus) -> None:
+        ident = s.identity
+        lines = [f"[b]{self.provider.label}[/]   {_badge(s.state)}"]
+        if ident:
+            if ident.user:
+                lines.append(f"user: {ident.user}")
+            if ident.account:
+                label = (self.provider.secondary_label or "account").lower()
+                lines.append(f"{label}: {ident.account}")
+            if ident.expires_at:
+                exp_label, urg = format_expires(ident.expires_at)
+                color = {Urgency.OK: "green", Urgency.SOON: "yellow", Urgency.EXPIRED: "red"}[urg]
+                lines.append(f"expires: [{color}]{exp_label}[/]")
+        if s.active_profile:
+            lines.append(f"active: {s.active_profile}")
+        if s.message:
+            lines.append(f"[dim]{s.message}[/]")
+        if self._status_widget is not None:
+            self._status_widget.update("\n".join(lines))
+        if self._profile_select is not None:
+            opts = [(p, p) for p in s.profiles] or [("(none)", "")]
+            self._profile_select.set_options(opts)
+            if s.active_profile and s.active_profile in s.profiles:
+                self._profile_select.value = s.active_profile
+
+    def render_secondary(self, items: list[tuple[str, str]]) -> None:
+        if self._secondary_select is None:
+            return
+        opts = [(f"{sid}  ({name})" if name and name != sid else sid, sid) for sid, name in items]
+        self._secondary_select.set_options(opts or [("(none)", "")])
+
+    # --- workers ----------------------------------------------------------
+
+    @work(thread=True, exclusive=True)
+    def refresh_status(self) -> None:
+        s = self.provider.status()
+        self.app.call_from_thread(self.render_status, s)
+        if hasattr(self.app, "_update_tab_label"):
+            self.app.call_from_thread(self.app._update_tab_label, self.provider.key, s.state)
+        if self.provider.secondary_label is not None and s.ok:
+            self.refresh_secondary()
+
+    @work(thread=True, exclusive=False)
+    def refresh_secondary(self) -> None:
+        if self.provider.secondary_label is None:
+            return
+        items = self.provider.list_secondary()
+        self.app.call_from_thread(self.render_secondary, items)
+        self.app.call_from_thread(
+            self._log_tui,
+            f"[{self.provider.key}] {len(items)} {self.provider.secondary_label.lower()}(s) available",
+        )
+
+    def _log_tui(self, msg: str) -> None:
+        app = self.app
+        if hasattr(app, "_log"):
+            app._log(msg)
+
+    # --- helpers ----------------------------------------------------------
+
+    def selected_profile(self) -> Optional[str]:
+        if self._profile_select is None:
+            return None
+        v = self._profile_select.value
+        return None if v in (Select.BLANK, "") else str(v)
+
+    def selected_secondary(self) -> Optional[str]:
+        if self._secondary_select is None:
+            return None
+        v = self._secondary_select.value
+        return None if v in (Select.BLANK, "") else str(v)
+
+    def selected_method(self) -> str:
+        v = self._method_select.value if self._method_select else None
+        if v in (None, Select.BLANK):
+            return self.provider.login_methods()[0]
+        return str(v)
+
+    def token_value(self) -> Optional[str]:
+        return self._token_input.value if self._token_input else None
+
+
+class CloudLoginTUI(App):
+    CSS = """
+    Screen { background: $surface; }
+    .status { padding: 1 1; height: auto; }
+    .row { height: auto; padding: 0 1; }
+    Select { width: 38; margin-right: 2; }
+    Input { width: 60; }
+    Button { margin-right: 1; }
+    #log { height: 16; border: solid $primary; }
+    """
+    BINDINGS = [
+        ("r", "refresh_all", "Refresh all"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._panes: dict[str, ProviderPane] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        initial_key = providers.all_providers()[0].key
+        with TabbedContent(initial=initial_key):
+            for p in providers.all_providers():
+                pane = ProviderPane(p)
+                self._panes[p.key] = pane
+                with TabPane(p.label, id=p.key):
+                    yield pane
+        yield Log(id="log", highlight=True)
+        yield Footer()
+
+    def _log(self, msg: str) -> None:
+        self.query_one("#log", Log).write_line(msg)
+
+    def on_mount(self) -> None:
+        # Start everything dim; status callbacks light them up green when authenticated.
+        for key in self._panes:
+            self._update_tab_label(key, AuthState.UNKNOWN)
+
+    def _update_tab_label(self, provider_key: str, state: AuthState) -> None:
+        pane = self._panes.get(provider_key)
+        if pane is None:
+            return
+        name = pane.provider.label
+        markup = f"[green]{name}[/]" if state == AuthState.AUTHENTICATED else f"[dim]{name}[/]"
+        try:
+            tab = self.query_one(TabbedContent).get_tab(provider_key)
+            tab.label = markup
+        except Exception:
+            pass
+
+    def action_refresh_all(self) -> None:
+        for pane in self._panes.values():
+            pane.refresh_status()
+        self._log("refreshing all providers…")
+
+    @on(Button.Pressed)
+    def _on_button(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if "-" not in bid:
+            return
+        action, key = bid.split("-", 1)
+        pane = self._panes.get(key)
+        if not pane:
+            return
+        if action == "refresh":
+            pane.refresh_status()
+            self._log(f"[{key}] refreshing…")
+        elif action == "login":
+            self._do_login(pane)
+        elif action == "logout":
+            self._do_logout(pane)
+        elif action == "forget":
+            self._do_forget(pane)
+        elif action == "setsec":
+            self._do_set_secondary(pane)
+        elif action == "refreshsec":
+            pane.refresh_secondary()
+
+    def _on_output(self, key: str, line: str) -> None:
+        if line.strip():
+            self.call_from_thread(self._log, f"[{key}] {line}")
+
+    @work(thread=True, exclusive=False)
+    def _do_login(self, pane: ProviderPane) -> None:
+        provider = pane.provider
+        method = pane.selected_method()
+        kwargs: dict = {}
+        if provider.key == "aws":
+            if method == "sso":
+                profile = pane.selected_profile()
+                if not profile:
+                    self.call_from_thread(self._log, "[aws] pick a profile first")
+                    return
+                kwargs["profile"] = profile
+            elif method == "access-key":
+                token = pane.token_value() or ""
+                if ":" not in token:
+                    self.call_from_thread(
+                        self._log,
+                        "[aws] for access-key method, put `AKID:SECRET` in the token field",
+                    )
+                    return
+                akid, secret = token.split(":", 1)
+                kwargs.update(
+                    profile=pane.selected_profile() or "default",
+                    access_key_id=akid.strip(),
+                    secret_access_key=secret.strip(),
+                )
+        elif provider.key == "gcp":
+            if pane.selected_profile():
+                kwargs["configuration"] = pane.selected_profile()
+        elif provider.key == "azure":
+            pass
+        elif provider.key in {"vultr", "digitalocean"}:
+            token = (pane.token_value() or "").strip()
+            if token:
+                kwargs["token"] = token
+            # else: provider.login() will resolve from env → CLI config file → keyring
+
+        self.call_from_thread(self._log, f"[{provider.key}] login method={method} starting…")
+        result = provider.login(
+            method=method,
+            on_output=lambda line, k=provider.key: self._on_output(k, line),
+            **kwargs,
+        )
+        self.call_from_thread(
+            self._log, f"[{provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
+        )
+        pane.refresh_status()
+
+    @work(thread=True, exclusive=False)
+    def _do_logout(self, pane: ProviderPane) -> None:
+        result = pane.provider.logout()
+        self.call_from_thread(
+            self._log, f"[{pane.provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
+        )
+        pane.refresh_status()
+
+    @work(thread=True, exclusive=False)
+    def _do_forget(self, pane: ProviderPane) -> None:
+        result = pane.provider.forget()
+        self.call_from_thread(
+            self._log, f"[{pane.provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
+        )
+        pane.refresh_status()
+
+    @work(thread=True, exclusive=False)
+    def _do_set_secondary(self, pane: ProviderPane) -> None:
+        if pane.provider.secondary_label is None:
+            return
+        sid = pane.selected_secondary()
+        if not sid:
+            self.call_from_thread(
+                self._log,
+                f"[{pane.provider.key}] no {pane.provider.secondary_label.lower()} selected",
+            )
+            return
+        result = pane.provider.set_secondary(sid)
+        self.call_from_thread(
+            self._log, f"[{pane.provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
+        )
+        pane.refresh_status()
+
+
+def run() -> int:
+    CloudLoginTUI().run()
+    return 0
