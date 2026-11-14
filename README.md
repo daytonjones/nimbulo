@@ -1,0 +1,124 @@
+# cloud-login
+
+One place to see "am I logged in?" across AWS, GCP, Azure, Vultr, and Digital Ocean — and to re-auth without remembering each tool's commands.
+
+The underlying CLIs (`aws`, `gcloud`, `az`, `doctl`/`vultr-cli`) remain the source of truth. This app wraps them: status checks, login flows (SSO browser, ADC, device code, API key), profile/configuration/subscription/project switching, and surfaces SSO token expiration.
+
+## Surfaces
+
+The same provider layer drives four interchangeable UIs:
+
+| Command                | UI       | Use case                                                     |
+| ---------------------- | -------- | ------------------------------------------------------------ |
+| `cloud-login`          | GUI      | PySide6 desktop window with tabs per provider (default).     |
+| `cloud-login tui`      | TUI      | Textual terminal UI with the same tabs.                      |
+| `cloud-login menubar`  | menubar  | macOS resident tray icon with aggregate health + per-provider menu. |
+| `cloud-login status`   | CLI      | Status table for all providers (or one with `-p aws`).       |
+
+Every action in the GUI/TUI/menubar is also a CLI subcommand. Run `cloud-login --help` to see all.
+
+## Install
+
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+# Install globally so `cloud-login` is on PATH everywhere
+uv tool install cloud-login
+# or
+pipx install cloud-login
+```
+
+To upgrade: `uv tool upgrade cloud-login` (or `pipx upgrade cloud-login`).
+
+To uninstall: `uv tool uninstall cloud-login`.
+
+## Providers
+
+| Provider     | Backed by           | Profile concept   | Secondary picker | Credentials                                |
+| ------------ | ------------------- | ----------------- | ---------------- | ------------------------------------------ |
+| AWS          | `aws` CLI           | Profile           | —                | SSO browser, or AKID/secret to `~/.aws/credentials` |
+| Google Cloud | `gcloud` CLI        | Configuration     | Project          | `gcloud auth login` (+ ADC), service accounts via gcloud |
+| Azure        | `az` CLI            | —                 | Subscription     | `az login` (browser or `--use-device-code`) |
+| Vultr        | api.vultr.com       | —                 | —                | API key — env, `~/.vultr-cli.yaml`, or macOS Keychain |
+| DigitalOcean | api.digitalocean.com| —                 | —                | API token — env, `~/.config/doctl/config.yaml`, or macOS Keychain |
+
+For Vultr/DO the API key **is** the credential. `Logout` is a no-op informational message; use **Forget Key** (or `cloud-login forget vultr`/`digitalocean`) to actually remove the stored key from Keychain.
+
+## Common CLI subcommands
+
+```bash
+cloud-login status                       # all providers
+cloud-login status -p aws --profile foo  # one provider, specific profile
+
+cloud-login login aws -m sso --profile my-profile
+cloud-login login aws -m access-key --profile foo --region us-east-1
+cloud-login login gcp                    # default method is user+adc (two browsers)
+cloud-login login gcp -m adc
+cloud-login login azure                  # `az login`
+cloud-login login azure -m device-code   # headless / SSH
+
+cloud-login profiles aws
+cloud-login projects                     # GCP
+cloud-login subscriptions                # Azure
+cloud-login set-project <project-id>     # GCP
+cloud-login set-subscription <sub-id>    # Azure
+
+cloud-login logout aws                   # `aws sso logout`
+cloud-login forget vultr                 # delete keyring entry
+```
+
+## Auto-start the menu bar at macOS login
+
+```bash
+cloud-login autostart install      # writes ~/Library/LaunchAgents/com.cloud-login.menubar.plist and launchctl loads it
+cloud-login autostart status       # check whether it's installed and loaded
+cloud-login autostart uninstall    # remove the LaunchAgent
+```
+
+The launchd plist runs `cloud-login menubar`. After install, it'll start automatically on next login; logs go to `/tmp/cloud-login-menubar.{log,err}`.
+
+## Where things live
+
+| Path                                       | What                                             |
+| ------------------------------------------ | ------------------------------------------------ |
+| `~/.aws/config`, `~/.aws/credentials`      | AWS profiles (managed by `aws` CLI)              |
+| `~/.aws/sso/cache/*.json`                  | SSO tokens; expiry is read from here             |
+| `~/.config/gcloud/`                        | gcloud configurations + ADC                      |
+| `~/.azure/`                                | Azure CLI session                                |
+| `~/.vultr-cli.yaml`                        | Vultr CLI config (optional)                      |
+| `~/.config/doctl/config.yaml`              | doctl config (optional)                          |
+| macOS Keychain, service `cloud-login`      | Stored Vultr/DO API keys                         |
+| `~/.config/cloud-login/settings.json`      | App preferences (window geometry, last-selected profile per provider, etc.) |
+
+Nothing is read or written outside these. The app never bypasses the underlying CLIs for credential material.
+
+## Project layout
+
+```
+src/cloud_login/
+├── __init__.py            # main() entry point
+├── models.py              # ProviderStatus, Identity, format_expires
+├── settings.py            # JSON-backed persistent preferences
+├── secrets.py             # macOS Keychain wrapper for Vultr/DO
+├── assets/                # bundled provider logo SVGs
+├── providers/
+│   ├── base.py            # abstract Provider + subprocess helpers
+│   ├── aws.py             # `aws` CLI + SSO cache parsing for expiry
+│   ├── gcp.py             # `gcloud` CLI + project list
+│   ├── azure.py           # `az` CLI + subscription list
+│   ├── vultr.py           # HTTP to api.vultr.com + keyring
+│   └── digitalocean.py    # HTTP to api.digitalocean.com + keyring
+└── ui/
+    ├── cli.py             # Typer commands (entry point routes here)
+    ├── tui.py             # Textual TUI
+    ├── gui.py             # PySide6 GUI (default)
+    └── menubar.py         # macOS menu-bar status app
+```
+
+Adding a sixth provider means writing one file in `providers/` and adding it to `providers/__init__.py:all_providers()`. The UI shape is data-driven via `profile_label` and `secondary_label` attributes on the Provider — no UI changes needed for typical providers.
+
+## Building a wheel
+
+```bash
+uv build                              # produces dist/cloud_login-<version>-py3-none-any.whl + .tar.gz
+```

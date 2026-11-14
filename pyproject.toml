@@ -1,0 +1,43 @@
+[project]
+name = "cloud-login"
+version = "0.1.0"
+description = "Manage logins across AWS, GCP, Azure, Vultr, and DigitalOcean from CLI/TUI/GUI"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dayton Jones", email = "jones.dayton@gmail.com" }]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "textual>=0.74",
+    "pyside6>=6.7",
+    "keyring>=25.0",
+    "requests>=2.32",
+    "pyyaml>=6.0",
+    "qt-material>=2.14",
+]
+
+[project.scripts]
+cloud-login = "cloud_login:main"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest", "ruff", "twine"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Recovered baseline source is kept verbatim.
+"src/cloud_login/**" = ["E501", "F401", "I001"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
