@@ -214,8 +214,38 @@ def test_gui_other_providers_unchanged(monkeypatch):
     assert seen == [{"method": "sso", "profile": "dev"}]
 
 
-def test_gui_oci_tab_fits_default_window():
-    tab = make_tab()
-    select_method(tab, "api-key")
-    assert tab.minimumSizeHint().height() <= 600  # + tab bar and margins stays under a 700px-high screen
-    assert tab.minimumSizeHint().width() <= 820
+@pytest.fixture
+def themed(qapp, monkeypatch):
+    """Apply the real qt-material theme + OVERLAY_QSS exactly as run() does, then undo."""
+    from qt_material import apply_stylesheet
+
+    from cloud_login import providers
+
+    for cls in {type(p) for p in providers.all_providers()}:
+        monkeypatch.setattr(cls, "status", lambda self, profile=None: ProviderStatus(self.key, AuthState.UNKNOWN))
+        monkeypatch.setattr(cls, "list_secondary", lambda self: [])
+    apply_stylesheet(qapp, theme=gui.THEME, extra={"density_scale": "-1"})
+    qapp.setStyleSheet(qapp.styleSheet() + "\n" + gui.OVERLAY_QSS)
+    yield
+    qapp.setStyleSheet("")
+
+
+def test_gui_oci_tab_fits_default_window(themed):
+    from cloud_login import providers
+
+    tabs = {}
+    for p in providers.all_providers():
+        tabs[p.key] = make_tab(p)
+    oci = tabs["oci"]
+    select_method(oci, "api-key")
+    others = max(t.minimumSizeHint().height() for k, t in tabs.items() if k != "oci")
+    # reviewer measured 749 vs 454 before the form moved into a bounded scroll area
+    assert oci.minimumSizeHint().height() <= others, (oci.minimumSizeHint().height(), others)
+    # at the minimum window size (820x600) the tab area is ~480px high: Login stays visible
+    oci.resize(820, 480)
+    oci.show()
+    QApplication.processEvents()
+    assert oci.rect().contains(oci.login_btn.geometry()), (oci.login_btn.geometry(), oci.rect())
+    assert oci.oci_scroll.height() >= 40
+    assert oci.oci_scroll.horizontalScrollBar().maximum() == 0
+    oci.hide()

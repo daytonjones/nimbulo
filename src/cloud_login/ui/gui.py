@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -171,6 +172,9 @@ class _Worker(QObject):
 # ---------------------------------------------------------------------------
 
 
+# Visible height of the OCI api-key form's scroll area (the form scrolls inside it).
+OCI_FORM_MIN_HEIGHT = 140
+
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 
@@ -234,6 +238,7 @@ class ProviderTab(QWidget):
         self._initial_secondary: str | None = settings.get(f"last_secondary.{provider.key}")
         # OCI-only widgets (None for every other provider)
         self.oci_form: QGroupBox | None = None
+        self.oci_scroll: QScrollArea | None = None
         self.oci_fields: dict[str, Any] = {}
         self.oci_browse_btn: QPushButton | None = None
         self.oci_msg: QLabel | None = None
@@ -249,6 +254,10 @@ class ProviderTab(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 18)
         outer.setSpacing(16)
+        if self.provider.key == "oci":
+            # tighter than the other tabs so the API-key form fits in the same height
+            outer.setContentsMargins(20, 10, 20, 10)
+            outer.setSpacing(8)
 
         # --- status card ---
         self.status_card = QFrame()
@@ -322,6 +331,7 @@ class ProviderTab(QWidget):
             outer.addWidget(picker_box)
 
         # --- secondary (project / subscription) ---
+        self._sec_box: QGroupBox | None = None
         self.secondary_combo: QComboBox | None = None
         self.set_secondary_btn: QPushButton | None = None
         self.refresh_secondary_btn: QPushButton | None = None
@@ -350,6 +360,7 @@ class ProviderTab(QWidget):
             self.refresh_secondary_btn = QPushButton("Refresh")
             self.refresh_secondary_btn.clicked.connect(self.refresh_secondary)
             sec_layout.addWidget(self.refresh_secondary_btn)
+            self._sec_box = sec_box
             outer.addWidget(sec_box)
 
         # --- credentials (token / access key) ---
@@ -380,7 +391,15 @@ class ProviderTab(QWidget):
             outer.addWidget(cred_box)
 
         if self.provider.key == "oci":
-            outer.addWidget(self._build_oci_form())
+            # The form scrolls inside a bounded area so it never grows the tab
+            # (the tab must stay no taller than the other providers' tabs).
+            self.oci_scroll = QScrollArea()
+            self.oci_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self.oci_scroll.setWidgetResizable(True)
+            self.oci_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.oci_scroll.setMinimumHeight(OCI_FORM_MIN_HEIGHT)
+            self.oci_scroll.setWidget(self._build_oci_form())
+            outer.addWidget(self.oci_scroll, 1)
             if self.method_combo is not None:
                 self.method_combo.currentIndexChanged.connect(self._sync_oci_form)
             self._sync_oci_form()
@@ -511,7 +530,13 @@ class ProviderTab(QWidget):
     @Slot()
     def _sync_oci_form(self) -> None:
         if self.oci_form is not None:
-            self.oci_form.setVisible(self._selected_method() == "api-key")
+            show = self._selected_method() == "api-key"
+            self.oci_form.setVisible(show)
+            if self._sec_box is not None:
+                # compartments are irrelevant while creating a profile; frees height for the form
+                self._sec_box.setVisible(not show)
+            if self.oci_scroll is not None:
+                self.oci_scroll.setVisible(show)
 
     def oci_form_values(self) -> dict[str, Any]:
         f = self.oci_fields
