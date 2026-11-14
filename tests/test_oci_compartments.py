@@ -91,7 +91,7 @@ def test_stale_saved_compartment_dropped(fake_run, env):
     fake_run.add(_cmd(), out=LISTING)
     p.list_secondary()
     assert p.active_compartment() is None
-    assert settings.get("oci.compartment.P1") is None
+    assert settings.get("oci.compartment") == {}
 
 
 def test_valid_saved_compartment_kept(fake_run, env):
@@ -148,3 +148,44 @@ def test_bare_401_in_output_is_not_auth_failure(fake_run, env):
     fake_run.add(["oci", "iam", "region", "list", "--profile", "A"], rc=1,
                  err='{"status":401, "code": "x"}')
     assert OCIProvider().status("A").state == AuthState.UNAUTHENTICATED
+
+
+NAMES = ["a.b", "me@example.com", "x.y.z", "plain"]
+
+
+def _cfg_names(env, names):
+    (env / "config").write_text("".join(f"[{n}]\ntenancy={T}\n" for n in names))
+
+
+def test_dotted_profile_names_round_trip_independently(fake_run, env):
+    _cfg_names(env, NAMES)
+    p = OCIProvider()
+    for i, n in enumerate(NAMES):
+        settings.set("last_profile.oci", n)
+        assert p.set_secondary(f"ocid..{i}").ok
+    for i, n in enumerate(NAMES):
+        assert p.active_compartment(n) == f"ocid..{i}"
+    assert settings.get("oci.compartment") == {n: f"ocid..{i}" for i, n in enumerate(NAMES)}
+
+
+def test_stale_removal_of_dotted_profile_keeps_others(fake_run, env):
+    _cfg_names(env, NAMES)
+    p = OCIProvider()
+    for n in ("a.b", "plain"):
+        settings.set("last_profile.oci", n)
+        p.set_secondary(DEV if n == "plain" else "ocid..gone")
+    settings.set("last_profile.oci", "a.b")
+    fake_run.add(_cmd("a.b"), out=LISTING)
+    p.list_secondary()
+    assert p.active_compartment("a.b") is None
+    assert p.active_compartment("plain") == DEV
+
+
+def test_corrupt_stored_value_is_treated_as_empty(fake_run, env):
+    settings.set("oci.compartment", "garbage")
+    p = OCIProvider()
+    assert p.active_compartment("P1") is None
+    fake_run.add(_cmd(), out=LISTING)
+    assert len(p.list_secondary()) == 4
+    assert p.set_secondary(DEV).ok
+    assert p.active_compartment("P1") == DEV

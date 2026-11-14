@@ -25,6 +25,7 @@ _AUTH_FAIL_MARKERS = ("notauthenticated", "invalidkey", "not authenticated")
 # A bare "401" would match request ids / OCIDs; require the JSON status field.
 _STATUS_401 = re.compile(r'"status"\s*:\s*401\b')
 COMPARTMENT_CACHE_TTL = 60
+COMPARTMENT_KEY = "oci.compartment"  # settings: {profile: compartment OCID}
 ROOT_LABEL = "root"  # display name of the tenancy root compartment
 
 # (profile -> (fetched_at, listing)); module-level so separate provider instances share it.
@@ -184,6 +185,12 @@ class OCIProvider(Provider):
 
     # --- compartments --------------------------------------------------------
 
+    @staticmethod
+    def _saved_compartments() -> dict[str, str]:
+        """profile -> compartment OCID. Kept as one dict so dots in profile names are safe."""
+        d = settings.get(COMPARTMENT_KEY, {})
+        return dict(d) if isinstance(d, dict) else {}
+
     def _profile_for_compartments(self) -> tuple[str | None, str | None]:
         """Return (active profile, its tenancy OCID)."""
         cfg = oci_config.read_profiles()
@@ -233,17 +240,19 @@ class OCIProvider(Provider):
         except (ValueError, KeyError, TypeError):
             return []
         _compartment_cache[profile] = (_clock(), result)
-        key = f"oci.compartment.{profile}"
-        saved = settings.get(key)
-        if saved and saved not in {cid for cid, _ in result}:
-            settings.delete(key)  # stale: compartment gone or no longer ACTIVE
+        saved = self._saved_compartments()
+        if saved.get(profile) and saved[profile] not in {cid for cid, _ in result}:
+            del saved[profile]  # stale: compartment gone or no longer ACTIVE
+            settings.set(COMPARTMENT_KEY, saved)
         return list(result)
 
     def set_secondary(self, sid: str) -> LoginResult:
         profile, _ = self._profile_for_compartments()
         if not profile:
             return LoginResult(ok=False, message="no OCI profile selected")
-        settings.set(f"oci.compartment.{profile}", sid)
+        saved = self._saved_compartments()
+        saved[profile] = sid
+        settings.set(COMPARTMENT_KEY, saved)
         return LoginResult(ok=True, message=f"compartment set for profile {profile}")
 
     def active_compartment(self, profile: str | None = None) -> str | None:
@@ -251,4 +260,4 @@ class OCIProvider(Provider):
             profile, _ = self._profile_for_compartments()
         if not profile:
             return None
-        return settings.get(f"oci.compartment.{profile}") or None
+        return self._saved_compartments().get(profile) or None
