@@ -13,10 +13,10 @@ def test_imports():
     assert all_providers()
 
 
-def test_registry_has_five_providers_baseline():
+def test_registry_has_six_providers():
     from cloud_login.providers import all_providers
 
-    assert [p.key for p in all_providers()] == ["aws", "gcp", "azure", "vultr", "digitalocean"]
+    assert [p.key for p in all_providers()] == ["aws", "gcp", "azure", "oci", "vultr", "digitalocean"]
 
 
 def test_assets_exist():

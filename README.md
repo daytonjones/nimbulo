@@ -1,6 +1,6 @@
 # cloud-login
 
-One place to see "am I logged in?" across AWS, GCP, Azure, Vultr, and Digital Ocean — and to re-auth without remembering each tool's commands.
+One place to see "am I logged in?" across AWS, GCP, Azure, Oracle Cloud (OCI), Vultr, and Digital Ocean — and to re-auth without remembering each tool's commands.
 
 The underlying CLIs (`aws`, `gcloud`, `az`, `doctl`/`vultr-cli`) remain the source of truth. This app wraps them: status checks, login flows (SSO browser, ADC, device code, API key), profile/configuration/subscription/project switching, and surfaces SSO token expiration.
 
@@ -39,6 +39,7 @@ To uninstall: `uv tool uninstall cloud-login`.
 | AWS          | `aws` CLI           | Profile           | —                | SSO browser, or AKID/secret to `~/.aws/credentials` |
 | Google Cloud | `gcloud` CLI        | Configuration     | Project          | `gcloud auth login` (+ ADC), service accounts via gcloud |
 | Azure        | `az` CLI            | —                 | Subscription     | `az login` (browser or `--use-device-code`) |
+| OCI          | `oci` CLI           | Profile (in `~/.oci/config`) | Compartment | Session browser auth, API key (generated or existing), or an existing profile |
 | Vultr        | api.vultr.com       | —                 | —                | API key — env, `~/.vultr-cli.yaml`, or macOS Keychain |
 | DigitalOcean | api.digitalocean.com| —                 | —                | API token — env, `~/.config/doctl/config.yaml`, or macOS Keychain |
 
@@ -60,12 +61,43 @@ cloud-login login azure -m device-code   # headless / SSH
 cloud-login profiles aws
 cloud-login projects                     # GCP
 cloud-login subscriptions                # Azure
+cloud-login compartments                 # OCI
 cloud-login set-project <project-id>     # GCP
 cloud-login set-subscription <sub-id>    # Azure
+cloud-login set-compartment <ocid>     # OCI
 
 cloud-login logout aws                   # `aws sso logout`
 cloud-login forget vultr                 # delete keyring entry
 ```
+
+## OCI
+
+Three login methods:
+
+```bash
+# Browser session (token-based, expires; refresh by logging in again)
+cloud-login login oci -m session --profile my-profile --region us-ashburn-1
+
+# Use a profile that already exists in ~/.oci/config
+cloud-login login oci -m profile --profile my-profile
+
+# API key: generate a new key pair (or pass --key-file <path> for an existing one)
+cloud-login login oci -m api-key --profile my-profile --user <user-ocid> \
+  --tenancy <tenancy-ocid> --region us-ashburn-1 --generate-key
+```
+
+Missing api-key fields are prompted for; there is no secret to type. Use `--overwrite` to replace an existing profile.
+
+**Console upload required.** After API-key login the public key is printed; you must upload it in the OCI console (Identity -> Users -> your user -> API keys -> Add API key) before the profile can authenticate.
+
+Compartments:
+
+```bash
+cloud-login compartments                 # id and path for the active profile
+cloud-login set-compartment <ocid>
+```
+
+Nothing is stored in `~/.oci/config` except standard profile entries; the compartment choice lives in `~/.config/cloud-login/settings.json`.
 
 ## Auto-start the menu bar at macOS login
 
@@ -85,6 +117,7 @@ The launchd plist runs `cloud-login menubar`. After install, it'll start automat
 | `~/.aws/sso/cache/*.json`                  | SSO tokens; expiry is read from here             |
 | `~/.config/gcloud/`                        | gcloud configurations + ADC                      |
 | `~/.azure/`                                | Azure CLI session                                |
+| `~/.oci/config`, `~/.oci/sessions/`, `~/.oci/keys/` | OCI profiles, session tokens, generated API keys |
 | `~/.vultr-cli.yaml`                        | Vultr CLI config (optional)                      |
 | `~/.config/doctl/config.yaml`              | doctl config (optional)                          |
 | macOS Keychain, service `cloud-login`      | Stored Vultr/DO API keys                         |
@@ -106,6 +139,7 @@ src/cloud_login/
 │   ├── aws.py             # `aws` CLI + SSO cache parsing for expiry
 │   ├── gcp.py             # `gcloud` CLI + project list
 │   ├── azure.py           # `az` CLI + subscription list
+│   ├── oci.py             # `oci` CLI + compartments (oci_config.py reads/writes ~/.oci/config)
 │   ├── vultr.py           # HTTP to api.vultr.com + keyring
 │   └── digitalocean.py    # HTTP to api.digitalocean.com + keyring
 └── ui/
