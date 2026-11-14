@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import configparser
 import hashlib
-import io
 import os
 import re
 import shutil
@@ -30,6 +29,7 @@ KNOWN_REGIONS: tuple[str, ...] = (
     "af-johannesburg-1", "il-jerusalem-1",
 )
 
+_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*$")
 _OCID_PART = r"[A-Za-z0-9_-]+"
 
 
@@ -53,7 +53,7 @@ def _atomic_write_0600(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")  # created 0600
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -76,13 +76,6 @@ def write_api_key_profile(
     fingerprint: str,
     overwrite: bool = False,
 ) -> None:
-    cp = configparser.RawConfigParser()
-    cp.optionxform = str  # type: ignore[assignment,method-assign]
-    if OCI_CONFIG_PATH.exists():
-        cp.read(OCI_CONFIG_PATH)
-    exists = cp.has_section(name) if name != "DEFAULT" else bool(cp.defaults())
-    if exists and not overwrite:
-        raise FileExistsError(f"OCI profile {name!r} already exists")
     values = {
         "user": user,
         "fingerprint": fingerprint,
@@ -90,18 +83,39 @@ def write_api_key_profile(
         "region": region,
         "key_file": key_file,
     }
-    if name == "DEFAULT":
-        for k, v in values.items():
-            cp["DEFAULT"][k] = v
+    for v in (name, *values.values()):
+        if "\n" in v or "\r" in v:
+            raise ValueError("newlines are not allowed in OCI config values")
+    if not name or "]" in name:
+        raise ValueError("invalid profile name")
+    text = ""
+    if OCI_CONFIG_PATH.exists():
+        with open(OCI_CONFIG_PATH, encoding="utf-8", newline="") as f:
+            text = f.read()
+    lines = text.splitlines(keepends=True)
+    headers = [
+        (i, m.group(1).strip())
+        for i, line in enumerate(lines)
+        if (m := _HEADER_RE.match(line))
+    ]
+    block = f"[{name}]\n" + "".join(f"{k}={v}\n" for k, v in values.items())
+    pos = next((n for n, (_, h) in enumerate(headers) if h == name), None)
+    if pos is not None:
+        if not overwrite:
+            raise FileExistsError(f"OCI profile {name!r} already exists")
+        start = headers[pos][0]
+        end = headers[pos + 1][0] if pos + 1 < len(headers) else len(lines)
+        # keep trailing blank/comment lines (they belong to the next section)
+        keep = end
+        while keep > start + 1 and (not lines[keep - 1].strip() or lines[keep - 1].lstrip()[0] in "#;"):
+            keep -= 1
+        new_text = "".join(lines[:start]) + block + "".join(lines[keep:])
     else:
-        if cp.has_section(name):
-            cp.remove_section(name)
-        cp.add_section(name)
-        for k, v in values.items():
-            cp.set(name, k, v)
-    buf = io.StringIO()
-    cp.write(buf)
-    _atomic_write_0600(OCI_CONFIG_PATH, buf.getvalue())
+        if text and not text.endswith(("\n", "\r")):
+            text += "\n"
+        sep = "\n" if text.strip() else ""
+        new_text = text + sep + block
+    _atomic_write_0600(OCI_CONFIG_PATH, new_text)
 
 
 def validate_ocid(value: str, kind: str) -> bool:
@@ -147,11 +161,22 @@ def generate_key_pair(directory: Path, name: str) -> tuple[Path, Path, str]:
     pub = directory / f"{name}_public.pem"
     if priv.exists() or pub.exists():
         raise FileExistsError(f"key files for {name!r} already exist in {directory}")
-    key = _run([openssl, "genrsa", "2048"])
-    _write_new(priv, key, 0o600)  # born 0600, no chmod-after-write
-    pub_pem = _run([openssl, "rsa", "-pubout"], key)
-    _write_new(pub, pub_pem, 0o644)
-    der = _run([openssl, "rsa", "-pubout", "-outform", "DER"], key)
-    digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
+    created: list[Path] = []
+    try:
+        key = _run([openssl, "genrsa", "2048"])
+        _write_new(priv, key, 0o600)  # born 0600, no chmod-after-write
+        created.append(priv)
+        pub_pem = _run([openssl, "rsa", "-pubout"], key)
+        _write_new(pub, pub_pem, 0o644)
+        created.append(pub)
+        der = _run([openssl, "rsa", "-pubout", "-outform", "DER"], key)
+        digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
+    except BaseException:
+        for f in created:  # only files this call created
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        raise
     fingerprint = ":".join(digest[i : i + 2] for i in range(0, 32, 2))
     return priv, pub, fingerprint

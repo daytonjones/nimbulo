@@ -74,3 +74,85 @@ def test_generate_key_pair_creates_0600_private_key(tmp_path):
     assert priv.read_text().startswith("-----BEGIN")
     assert pub.read_text().startswith("-----BEGIN PUBLIC KEY")
     assert len(fp.split(":")) == 16
+
+
+MESSY = (
+    "# my creds\n[DEFAULT]\nuser   =  u1\n\n# prod below\n[PROD]\nuser=u2\n  region = uk-london-1\n\n\n"
+    "[OTHER]\n; keep me\nuser=u3\n"
+)
+
+
+def test_add_profile_preserves_bytes(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(MESSY)
+    _add("DEV")
+    out = cfg.read_text()
+    assert out.startswith(MESSY)
+    assert out[len(MESSY):].startswith("\n[DEV]\n")
+
+
+def test_overwrite_replaces_only_that_section(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(MESSY)
+    _add("PROD", overwrite=True)
+    out = cfg.read_text()
+    head = MESSY[: MESSY.index("[PROD]")]
+    tail = MESSY[MESSY.index("[OTHER]"):]
+    assert out.startswith(head) and out.endswith(tail)
+    assert "\n\n\n[OTHER]" in out
+    assert oci_config.read_profiles()["PROD"]["user"] == UOCID
+
+
+def test_overwrite_default(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(MESSY)
+    _add("DEFAULT", overwrite=True)
+    out = cfg.read_text()
+    assert out.startswith("# my creds\n[DEFAULT]\nuser=" + UOCID)
+    assert out.endswith(MESSY[MESSY.index("# prod below"):])
+
+
+def test_no_trailing_newline(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("[A]\nuser=x")
+    _add("DEV")
+    out = cfg.read_text()
+    assert out.startswith("[A]\nuser=x\n\n[DEV]\n")
+    assert oci_config.read_profiles()["A"]["user"] == "x"
+
+
+def test_existing_0644_config_becomes_0600(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("[A]\nuser=x\n")
+    os.chmod(cfg, 0o644)
+    _add("DEV")
+    assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl missing")
+def test_generate_key_pair_cleans_up_on_failure(tmp_path, monkeypatch):
+    real = oci_config._run
+    calls = {"n": 0}
+
+    def flaky(args, data=None):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("openssl failed")
+        return real(args, data)
+
+    monkeypatch.setattr(oci_config, "_run", flaky)
+    with pytest.raises(RuntimeError):
+        oci_config.generate_key_pair(tmp_path, "k")
+    assert list(tmp_path.iterdir()) == []
+    monkeypatch.setattr(oci_config, "_run", real)
+    priv, pub, _ = oci_config.generate_key_pair(tmp_path, "k")
+    assert priv.exists() and pub.exists()
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl missing")
+def test_generate_key_pair_refuses_existing_untouched(tmp_path):
+    (tmp_path / "k.pem").write_text("precious")
+    with pytest.raises(FileExistsError):
+        oci_config.generate_key_pair(tmp_path, "k")
+    assert (tmp_path / "k.pem").read_text() == "precious"
+    assert not (tmp_path / "k_public.pem").exists()
