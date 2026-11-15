@@ -220,3 +220,43 @@ def test_corrupt_stored_value_is_treated_as_empty(fake_run, env):
     assert len(p.list_secondary()) == 4
     assert p.set_secondary(DEV).ok
     assert p.active_compartment("P1") == DEV
+
+
+# --- final review fix wave ----------------------------------------------------
+
+
+def test_session_profile_lists_with_security_token_auth(fake_run, env):
+    (env / "config").write_text(f"[S]\ntenancy={T}\nsecurity_token_file=/tok\nregion=us-ashburn-1\n")
+    fake_run.add(_cmd("S") + ["--auth", "security_token"], out=LISTING)
+    assert len(OCIProvider().list_secondary("S")) == 4
+    assert fake_run.calls == [_cmd("S") + ["--auth", "security_token"]]
+
+
+def test_api_key_profile_lists_without_auth_flag(fake_run, env):
+    fake_run.add(_cmd(), out=LISTING)
+    assert len(OCIProvider().list_secondary()) == 4
+    assert fake_run.calls == [_cmd()]
+
+
+def test_tenancy_inherited_from_default(fake_run, env):
+    (env / "config").write_text(f"[DEFAULT]\ntenancy={T}\n\n[P1]\nregion=us-ashburn-1\n")
+    fake_run.add(_cmd(), out=LISTING)
+    assert len(OCIProvider().list_secondary("P1")) == 4
+
+
+def test_explicit_profile_for_list_and_set(fake_run, env):
+    (env / "config").write_text(f"[P1]\ntenancy={T}\n[P2]\ntenancy={T}\n")
+    fake_run.add(_cmd("P2"), out=LISTING)
+    p = OCIProvider()
+    assert len(p.list_secondary("P2")) == 4
+    assert fake_run.calls == [_cmd("P2")]
+    assert p.set_secondary(DEV, profile="P2").ok
+    assert p.active_compartment("P2") == DEV and p.active_compartment("P1") is None
+
+
+def test_unknown_explicit_profile_is_rejected(fake_run, env):
+    p = OCIProvider()
+    assert p.list_secondary("NOPE") == []
+    res = p.set_secondary(DEV, profile="NOPE")
+    assert not res.ok and "NOPE" in res.message
+    assert fake_run.calls == []

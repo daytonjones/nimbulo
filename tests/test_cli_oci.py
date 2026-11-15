@@ -106,7 +106,23 @@ def test_cli_login_oci_failure_exit_and_no_markup(env, fake_run):
 def test_cli_compartments_and_set_compartment(env, fake_run):
     (env / "config").write_text(f"[P1]\ntenancy={T}\nregion=us-ashburn-1\n")
     fake_run.add(
-        ["oci", "iam", "compartment", "list"],
+        [
+            "oci",
+            "iam",
+            "compartment",
+            "list",
+            "--compartment-id",
+            T,
+            "--compartment-id-in-subtree",
+            "true",
+            "--all",
+            "--lifecycle-state",
+            "ACTIVE",
+            "--output",
+            "json",
+            "--profile",
+            "P1",
+        ],
         rc=0,
         out=json.dumps({"data": [{"id": DEV, "name": "dev", "compartment-id": T, "lifecycle-state": "ACTIVE"}]}),
     )

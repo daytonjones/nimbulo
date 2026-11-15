@@ -174,3 +174,139 @@ def test_openssl_timeout_is_generic_error(monkeypatch):
     with pytest.raises(RuntimeError) as e:
         oci_config._run(["openssl", "x"], b"k")
     assert "timed out" in str(e.value) and "SECRET" not in str(e.value)
+
+
+# --- final review fix wave ----------------------------------------------------
+
+import configparser  # noqa: E402
+
+FULL_DEFAULT = "[DEFAULT]\nuser=u1\ntenancy=t1\nfingerprint=f1\nkey_file=/k1.pem\nregion=us-ashburn-1\n"
+
+
+def test_read_profiles_merges_default_into_sections(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(FULL_DEFAULT + "\n[PROD]\nregion=eu-frankfurt-1\n")
+    p = oci_config.read_profiles()
+    assert p["PROD"] == {
+        "user": "u1",
+        "tenancy": "t1",
+        "fingerprint": "f1",
+        "key_file": "/k1.pem",
+        "region": "eu-frankfurt-1",
+    }
+    assert p["DEFAULT"]["region"] == "us-ashburn-1"
+
+
+@pytest.mark.parametrize(
+    "content, reason",
+    [
+        (b"[A]\nuser=x\n[A]\nuser=y\n", "line 3"),
+        (b"this is not an ini file\n", "line 1"),
+        (b"\xff\xfe\x00\x81garbage", "UTF-8"),
+        (b"[A]\nuser=x\nnot-an-option\n", "line 3"),
+    ],
+)
+def test_read_profiles_malformed_raises_short_config_error(cfg, content, reason):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_bytes(content)
+    with pytest.raises(oci_config.OCIConfigError) as e:
+        oci_config.read_profiles()
+    assert reason in str(e.value)
+    assert "\n" not in str(e.value)
+
+
+def test_read_profiles_unreadable_file_raises_config_error(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.mkdir()  # a directory where the file should be: open() fails with an OSError
+    with pytest.raises(oci_config.OCIConfigError):
+        oci_config.read_profiles()
+
+
+@pytest.mark.parametrize("header", ["[PROD] ", "[PROD]\t", "[PROD] # prod account", "[PROD] ; x"])
+def test_overwrite_matches_configparser_headers(cfg, header):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(f"[A]\nuser=a\n\n{header}\nuser=old\n\n[B]\nuser=b\n")
+    cp = configparser.RawConfigParser()
+    cp.read(cfg)
+    name = cp.sections()[1]  # whatever configparser calls the header
+    _add(name, overwrite=True)
+    text = cfg.read_text()
+    cp = configparser.RawConfigParser()
+    cp.read_string(text)  # strict: would raise DuplicateSectionError on a second section
+    assert cp.sections() == ["A", name, "B"]
+    assert cp[name]["user"] == UOCID and "old" not in text
+
+
+def test_indented_bracket_continuation_is_not_a_header(cfg):
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("[A]\nnote=first\n  [DEV]\n")
+    _add("DEV")
+    cp = configparser.RawConfigParser()
+    cp.read_string(cfg.read_text())
+    assert cp.sections() == ["A", "DEV"]
+    assert cp["A"]["note"] == "first\n[DEV]"
+
+
+def test_write_through_symlink_keeps_symlink(cfg, tmp_path):
+    real = tmp_path / "dotfiles" / "oci-config"
+    real.parent.mkdir()
+    real.write_text("[A]\nuser=x\n")
+    cfg.parent.mkdir(parents=True)
+    cfg.symlink_to(real)
+    _add("DEV")
+    assert cfg.is_symlink() and os.readlink(cfg) == str(real)
+    assert "[DEV]" in real.read_text()
+    assert [p.name for p in real.parent.iterdir()] == ["oci-config"]  # temp file lived (and died) there
+
+
+def test_write_new_removes_partial_file_on_failure(tmp_path, monkeypatch):
+    real_fdopen = os.fdopen
+
+    class Boom:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+        def write(self, data):
+            self.f.write(data[:10])
+            raise OSError("disk full")
+
+    monkeypatch.setattr(oci_config.os, "fdopen", lambda fd, mode: Boom(real_fdopen(fd, mode)))
+    target = tmp_path / "k.pem"
+    with pytest.raises(OSError):
+        oci_config._write_new(target, b"-----BEGIN PRIVATE KEY----- secret", 0o600)
+    assert not target.exists()
+
+
+def test_write_new_never_removes_existing_file(tmp_path):
+    target = tmp_path / "k.pem"
+    target.write_text("precious")
+    with pytest.raises(FileExistsError):
+        oci_config._write_new(target, b"x", 0o600)
+    assert target.read_text() == "precious"
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl missing")
+def test_public_pem_for_key_matches_generated(tmp_path):
+    priv, pub, _ = oci_config.generate_key_pair(tmp_path, "k")
+    assert oci_config.public_pem_for_key(priv) == pub.read_text()
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl missing")
+def test_public_pem_for_encrypted_key_is_clear_error(tmp_path):
+    import subprocess
+
+    key = tmp_path / "enc.pem"
+    subprocess.run(
+        ["openssl", "genrsa", "-aes256", "-passout", "pass:pw", "-out", str(key), "2048"],
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(RuntimeError) as e:
+        oci_config.public_pem_for_key(key)
+    assert "passphrase" in str(e.value)

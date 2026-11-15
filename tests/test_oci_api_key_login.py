@@ -174,6 +174,40 @@ def test_generate_with_existing_key_files_guides_user(env, fake_run):
     res, _ = _login(env, overwrite=True)
     assert not res.ok
     assert str(env / "keys" / "mine.pem") in res.message
-    assert "key_file" in res.message and "remove" in res.message.lower()
+    assert "Key file field" in res.message and "--key-file" in res.message and "remove" in res.message.lower()
+    assert "key_file=" not in res.message
     assert {p.name: p.read_bytes() for p in (env / "keys").iterdir()} == before
     assert not (env / "config").exists()
+
+
+# --- final review fix wave ----------------------------------------------------
+
+
+def test_existing_key_file_result_shows_public_key(env, fake_run):
+    _, pub, fp = oci_config.generate_key_pair(env / "k", "x")
+    fake_run.add(["oci", "iam", "region", "list", "--profile", "mine"], rc=1, err='{"status": 401}')
+    res, _ = _login(env, generate_key=False, key_file=str(env / "k" / "x.pem"))
+    assert pub.read_text().strip() in res.output
+    assert "PRIVATE KEY" not in res.output and fp in res.output
+
+
+@pytest.mark.parametrize("given", ["US-Ashburn-1", "  us-ashburn-1 ", "Us-AshBurn-1\t"])
+def test_region_is_normalised(env, fake_run, given):
+    fake_run.add(["oci", "iam", "region", "list", "--profile", "mine"], rc=0)
+    res, _ = _login(env, region=given)
+    assert res.ok, res.message
+    assert oci_config.read_profiles()["mine"]["region"] == "us-ashburn-1"
+
+
+def test_verification_failure_shows_service_error_code(env, fake_run):
+    err = 'ServiceError:\n{\n    "code": "InternalServerError",\n    "message": "boom",\n    "status": 500\n}\n'
+    fake_run.add(["oci", "iam", "region", "list", "--profile", "mine"], rc=1, err=err)
+    res, _ = _login(env)
+    assert "verification failed (InternalServerError: boom)" in res.message
+
+
+def test_malformed_config_api_key_login_fails_cleanly(env, fake_run):
+    (env / "config").write_text("[A]\n[A]\n")
+    res, _ = _login(env)
+    assert not res.ok and "could not be parsed" in res.message
+    assert not (env / "keys").exists()

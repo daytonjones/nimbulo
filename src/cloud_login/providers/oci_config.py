@@ -59,23 +59,82 @@ KNOWN_REGIONS: tuple[str, ...] = (
 )
 
 OPENSSL_TIMEOUT = 30
-_HEADER_RE = re.compile(r"^\[([^\]]+)\]\s*$")
+# configparser's own section-header grammar (RawConfigParser.SECTCRE), applied to the
+# stripped line: greedy, unanchored at the end, header name taken verbatim.
+_HEADER_RE = re.compile(r"\[(?P<header>.+)\]")
 _OCID_PART = r"[A-Za-z0-9_-]+"
 
 
+class OCIConfigError(Exception):
+    """~/.oci/config exists but cannot be read or parsed. ``str()`` is a one-line reason."""
+
+
+def _short_reason(exc: Exception) -> str:
+    if isinstance(exc, configparser.DuplicateSectionError):
+        return f"duplicate section [{exc.section}], line {exc.lineno}"
+    if isinstance(exc, configparser.DuplicateOptionError):
+        return f"duplicate key {exc.option!r} in [{exc.section}], line {exc.lineno}"
+    if isinstance(exc, configparser.MissingSectionHeaderError):
+        return f"no [section] header before line {exc.lineno}"
+    if isinstance(exc, configparser.ParsingError):
+        errors = getattr(exc, "errors", None) or []
+        if errors:
+            return f"unparsable line {errors[0][0]}"
+    if isinstance(exc, UnicodeDecodeError):
+        return "file is not valid UTF-8 text"
+    if isinstance(exc, OSError):
+        return f"cannot read file ({exc.strerror or exc.__class__.__name__})"
+    first = str(exc).strip().splitlines()
+    return first[0] if first else exc.__class__.__name__
+
+
 def read_profiles() -> dict[str, dict[str, str]]:
-    """Return {profile: {key: value}}; ``DEFAULT`` included. Empty if no file."""
-    if not OCI_CONFIG_PATH.exists():
+    """Return {profile: {key: value}}; ``DEFAULT`` included. Empty if no file.
+
+    Section values are MERGED with ``[DEFAULT]`` (as the oci CLI does). Raises
+    OCIConfigError if the file exists but cannot be read or parsed.
+    """
+    if not OCI_CONFIG_PATH.exists() and not OCI_CONFIG_PATH.is_symlink():
         return {}
     cp = configparser.RawConfigParser()
     cp.optionxform = str  # type: ignore[assignment,method-assign]
-    cp.read(OCI_CONFIG_PATH)
+    try:
+        with open(OCI_CONFIG_PATH, encoding="utf-8") as f:
+            cp.read_file(f)
+    except (configparser.Error, OSError, UnicodeDecodeError) as exc:
+        raise OCIConfigError(f"{OCI_CONFIG_PATH} could not be parsed: {_short_reason(exc)}") from None
     out: dict[str, dict[str, str]] = {}
     if cp.defaults():
         out["DEFAULT"] = dict(cp.defaults())
     for section in cp.sections():
-        # items() would merge DEFAULT values in; keep only the section's own keys.
-        out[section] = dict(cp._sections[section])  # type: ignore[attr-defined]
+        out[section] = dict(cp.items(section))  # DEFAULT values merged in, section wins
+    return out
+
+
+def _section_headers(lines: list[str]) -> list[tuple[int, str]]:
+    """(line index, section name) for every line configparser treats as a header.
+
+    Mirrors RawConfigParser with default settings: full-line ``#``/``;`` comments are
+    skipped, a line indented deeper than the current option is a continuation, and
+    the header regex is matched against the stripped line.
+    """
+    out: list[tuple[int, str]] = []
+    in_section = has_option = False
+    indent = 0
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if not s or s[0] in "#;":
+            continue
+        cur = len(raw) - len(raw.lstrip())
+        if in_section and has_option and cur > indent:
+            continue  # continuation of the previous value
+        indent = cur
+        m = _HEADER_RE.match(s)
+        if m:
+            out.append((i, m.group("header")))
+            in_section, has_option = True, False
+        elif "=" in s or ":" in s:
+            has_option = True
     return out
 
 
@@ -118,12 +177,14 @@ def write_api_key_profile(
             raise ValueError("newlines are not allowed in OCI config values")
     if not name or "]" in name:
         raise ValueError("invalid profile name")
+    # Resolve symlinks first so the temp file lives next to (and replaces) the real target.
+    target = OCI_CONFIG_PATH.resolve()
     text = ""
-    if OCI_CONFIG_PATH.exists():
-        with open(OCI_CONFIG_PATH, encoding="utf-8", newline="") as f:
+    if target.exists():
+        with open(target, encoding="utf-8", newline="") as f:
             text = f.read()
     lines = text.splitlines(keepends=True)
-    headers = [(i, m.group(1).strip()) for i, line in enumerate(lines) if (m := _HEADER_RE.match(line))]
+    headers = _section_headers(lines)
     block = f"[{name}]\n" + "".join(f"{k}={v}\n" for k, v in values.items())
     pos = next((n for n, (_, h) in enumerate(headers) if h == name), None)
     if pos is not None:
@@ -141,7 +202,7 @@ def write_api_key_profile(
             text += "\n"
         sep = "\n" if text.strip() else ""
         new_text = text + sep + block
-    _atomic_write_0600(OCI_CONFIG_PATH, new_text)
+    _atomic_write_0600(target, new_text)
 
 
 def validate_ocid(value: str, kind: str) -> bool:
@@ -173,14 +234,38 @@ def _run(args: list[str], data: bytes | None = None) -> bytes:
 
 
 def _write_new(path: Path, data: bytes, mode: int) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)  # raises if it exists: never ours to remove
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except BaseException:
+        try:
+            path.unlink()  # only the file this call just created
+        except OSError:
+            pass
+        raise
 
 
 def _format_fingerprint(der: bytes) -> str:
     digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
     return ":".join(digest[i : i + 2] for i in range(0, 32, 2))
+
+
+def _public_from_private(path: Path | str, der: bool) -> bytes:
+    """Public half of an existing unencrypted RSA private key, via openssl on stdin."""
+    openssl = _openssl()
+    try:
+        key = Path(os.path.expanduser(str(path))).read_bytes()
+    except OSError as e:
+        raise RuntimeError(f"cannot read key file: {e.strerror}") from None
+    args = [openssl, "rsa", "-pubout", *(["-outform", "DER"] if der else []), "-passin", "pass:"]
+    try:
+        return _run(args, key)
+    except RuntimeError:
+        raise RuntimeError(
+            "could not read the key file as an unencrypted RSA private key "
+            "(passphrase-protected keys are not supported)"
+        ) from None
 
 
 def fingerprint_for_key(path: Path | str) -> str:
@@ -189,19 +274,12 @@ def fingerprint_for_key(path: Path | str) -> str:
     The key is fed to openssl on stdin (never on the command line). Raises
     RuntimeError if the key cannot be read or is not a usable unencrypted RSA key.
     """
-    openssl = _openssl()
-    try:
-        key = Path(os.path.expanduser(str(path))).read_bytes()
-    except OSError as e:
-        raise RuntimeError(f"cannot read key file: {e.strerror}") from None
-    try:
-        der = _run([openssl, "rsa", "-pubout", "-outform", "DER", "-passin", "pass:"], key)
-    except RuntimeError:
-        raise RuntimeError(
-            "could not read the key file as an unencrypted RSA private key "
-            "(passphrase-protected keys are not supported)"
-        ) from None
-    return _format_fingerprint(der)
+    return _format_fingerprint(_public_from_private(path, der=True))
+
+
+def public_pem_for_key(path: Path | str) -> str:
+    """PEM public key for an existing unencrypted RSA private key (same rules as above)."""
+    return _public_from_private(path, der=False).decode("ascii")
 
 
 def generate_key_pair(directory: Path, name: str) -> tuple[Path, Path, str]:

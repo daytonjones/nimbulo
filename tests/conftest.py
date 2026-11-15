@@ -11,9 +11,11 @@ Usage::
         ...
         assert fake_run.calls == [["oci", "iam", "region", "list", "--profile", "P"]]
 
-* ``add(cmd, rc=0, out="", err="")`` registers a response. A call matches the
-  exact command, else the longest registered command that is a prefix of it.
-  Unregistered commands return ``(127, "", "no fake for ...")``.
+* ``add(cmd, rc=0, out="", err="", prefix=False)`` registers a response. A call
+  matches only the EXACT command. With ``prefix=True`` the entry also matches any
+  command that starts with ``cmd`` (the longest such prefix wins); use it only when
+  the full argv genuinely does not matter to the test. Unregistered commands
+  return ``(127, "", "no fake for ...")``.
 * ``calls`` records every command run (``_run`` and streamed alike);
   ``streamed`` records only the streamed ones.
 * Streamed commands feed ``out`` then ``err`` lines to ``on_output`` and return
@@ -35,19 +37,24 @@ from cloud_login.providers.base import Provider
 class FakeRun:
     def __init__(self) -> None:
         self.table: dict[tuple[str, ...], tuple[int, str, str]] = {}
+        self.prefixes: set[tuple[str, ...]] = set()
         self.calls: list[list[str]] = []
         self.streamed: list[list[str]] = []
         self.installed = True
 
-    def add(self, cmd: list[str], rc: int = 0, out: str = "", err: str = "") -> None:
+    def add(self, cmd: list[str], rc: int = 0, out: str = "", err: str = "", prefix: bool = False) -> None:
         self.table[tuple(cmd)] = (rc, out, err)
+        if prefix:
+            self.prefixes.add(tuple(cmd))
+        else:
+            self.prefixes.discard(tuple(cmd))
 
     def _lookup(self, cmd: list[str]) -> tuple[int, str, str]:
         key = tuple(cmd)
         if key in self.table:
             return self.table[key]
         best = None
-        for k in self.table:
+        for k in self.prefixes:
             if key[: len(k)] == k and (best is None or len(k) > len(best)):
                 best = k
         if best is not None:

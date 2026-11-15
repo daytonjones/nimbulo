@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from .base import OutputCb, Provider
 DEFAULT_REGION = "us-ashburn-1"
 OCI_KEYS_DIR: Path = Path(os.path.expanduser("~/.oci/keys"))  # monkeypatchable in tests
 API_CHECK_TIMEOUT = 15
+SESSION_VALIDATE_TIMEOUT = 20
 _AUTH_FAIL_MARKERS = ("notauthenticated", "invalidkey", "not authenticated")
 # A bare "401" would match request ids / OCIDs; require the JSON status field.
 _STATUS_401 = re.compile(r'"status"\s*:\s*401\b')
@@ -34,6 +36,15 @@ ROOT_LABEL = "root"  # display name of the tenancy root compartment
 # (profile -> (fetched_at, listing)); module-level so separate provider instances share it.
 _compartment_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
 _clock = time.monotonic  # monkeypatchable in tests
+
+
+@dataclass
+class ConfirmationRequired(LoginResult):
+    """A refusal the UI may retry after the user confirms.
+
+    Returned (with ``ok=False``) instead of running a destructive ``oci`` command:
+    retry ``login(..., overwrite=True)`` or ``logout(..., confirm=True)``.
+    """
 
 
 def _is_auth_failure(text: str) -> bool:
@@ -73,6 +84,14 @@ class OCIProvider(Provider):
 
     # --- status --------------------------------------------------------------
 
+    @staticmethod
+    def _config() -> tuple[dict[str, dict[str, str]], str]:
+        """(profiles, error). A malformed ~/.oci/config yields ({}, one-line reason)."""
+        try:
+            return oci_config.read_profiles(), ""
+        except oci_config.OCIConfigError as exc:
+            return {}, str(exc)
+
     def _pick_profile(self, profile: str | None, cfg: dict[str, dict[str, str]]) -> str | None:
         if profile:
             return profile
@@ -84,12 +103,14 @@ class OCIProvider(Provider):
         return next(iter(cfg), None)
 
     def status(self, profile: str | None = None) -> ProviderStatus:
-        cfg = oci_config.read_profiles()
+        cfg, cfg_err = self._config()
         names = list(cfg)
         if not self.cli_available():
             return ProviderStatus(
                 self.key, AuthState.NOT_INSTALLED, profiles=names, message="oci CLI not found on PATH"
             )
+        if cfg_err:
+            return ProviderStatus(self.key, AuthState.ERROR, active_profile=profile, message=cfg_err)
         target = self._pick_profile(profile, cfg)
         if not target:
             return ProviderStatus(
@@ -125,10 +146,14 @@ class OCIProvider(Provider):
         )
         if expires <= datetime.now(timezone.utc):
             return result(AuthState.EXPIRED, "session token expired", ident)
-        rc, out, serr = self._run(["oci", "session", "validate", "--profile", target, "--local"], timeout=20)
+        rc, out, serr = self._run(
+            ["oci", "session", "validate", "--profile", target, "--local"], timeout=SESSION_VALIDATE_TIMEOUT
+        )
         notes = " ".join(ln.strip() for ln in serr.splitlines() if ln.strip().startswith("WARNING"))
         if rc == 0:
             return result(AuthState.AUTHENTICATED, notes, ident)
+        if rc == 124:
+            return result(AuthState.ERROR, f"oci session validate timed out after {SESSION_VALIDATE_TIMEOUT}s", ident)
         msg = self._last_line(serr, out) or "session validation failed"
         return result(AuthState.EXPIRED if "expire" in msg.lower() else AuthState.UNAUTHENTICATED, msg, ident)
 
@@ -164,8 +189,29 @@ class OCIProvider(Provider):
 
     @staticmethod
     def _last_line(*texts: str) -> str:
+        """Most useful one-line error from oci output.
+
+        oci prints ``ServiceError:`` followed by indented JSON; surface ``code: message``
+        from it. Otherwise the last line that is neither a WARNING nor just braces.
+        """
         for t in texts:
-            lines = [ln.strip() for ln in t.splitlines() if ln.strip() and not ln.startswith("WARNING")]
+            idx = t.find("ServiceError:")
+            if idx >= 0:
+                brace = t.find("{", idx)
+                if brace >= 0:
+                    try:
+                        data, _ = json.JSONDecoder().raw_decode(t[brace:])
+                    except ValueError:
+                        data = None
+                    if isinstance(data, dict) and (data.get("code") or data.get("message")):
+                        parts = [str(data[k]).strip() for k in ("code", "message") if data.get(k)]
+                        return ": ".join(parts)
+        for t in texts:
+            lines = [
+                s
+                for ln in t.splitlines()
+                if (s := ln.strip()) and not s.startswith("WARNING") and s.strip("{}[](),") != ""
+            ]
             if lines:
                 return lines[-1]
         return ""
@@ -178,7 +224,22 @@ class OCIProvider(Provider):
     def login(self, method: str = "session", on_output: OutputCb = None, **kwargs: Any) -> LoginResult:
         if method == "session":
             profile = kwargs.get("profile") or "DEFAULT"
-            region = kwargs.get("region") or oci_config.read_profiles().get(profile, {}).get("region") or DEFAULT_REGION
+            cfg, cfg_err = self._config()
+            if cfg_err:
+                return LoginResult(ok=False, message=cfg_err)
+            opts = cfg.get(profile)
+            if opts is not None and not opts.get("security_token_file") and not kwargs.get("overwrite"):
+                return ConfirmationRequired(
+                    ok=False,
+                    message=(
+                        f"profile {profile} is an API-key profile: a session login would convert it to a "
+                        "1-hour session profile and remove its user, fingerprint, key_file, tenancy and "
+                        "pass_phrase entries. The oci CLI also rewrites ~/.oci/config without its comments. "
+                        "Use a new profile name or the profile method, or confirm to continue "
+                        "(CLI: --overwrite)."
+                    ),
+                )
+            region = kwargs.get("region") or (opts or {}).get("region") or DEFAULT_REGION
             rc, output = self._popen_stream(
                 ["oci", "session", "authenticate", "--profile-name", profile, "--region", region],
                 on_output=on_output,
@@ -189,6 +250,9 @@ class OCIProvider(Provider):
             )
         if method == "profile":
             st = self.status(kwargs.get("profile"))
+            chosen = kwargs.get("profile")
+            if chosen and chosen in st.profiles:
+                settings.set("last_profile.oci", chosen)  # later status/compartments use this profile
             return LoginResult(ok=st.ok, message=st.message or f"profile {st.active_profile}: {st.state.value}")
         if method == "api-key":
             return self._api_key_login(on_output, **kwargs)
@@ -204,7 +268,7 @@ class OCIProvider(Provider):
 
     def api_key_defaults(self) -> dict[str, str]:
         """Pre-fill values for the api-key login form."""
-        cfg = oci_config.read_profiles()
+        cfg, _ = self._config()
         active = self._pick_profile(None, cfg)
         region = (cfg.get(active, {}).get("region") if active else None) or DEFAULT_REGION
         profile = "my-profile" if "DEFAULT" in cfg else "DEFAULT"
@@ -217,7 +281,7 @@ class OCIProvider(Provider):
         name = str(kw.get("profile") or "")
         user = str(kw.get("user") or "").strip()
         tenancy = str(kw.get("tenancy") or "").strip()
-        region = str(kw.get("region") or "").strip()
+        region = str(kw.get("region") or "").strip().lower()
         key_file = kw.get("key_file") or None
         generate = bool(kw.get("generate_key", False))
         overwrite = bool(kw.get("overwrite", False))
@@ -238,7 +302,10 @@ class OCIProvider(Provider):
             kp = Path(str(key_file)).expanduser().resolve()
             if not kp.is_file():
                 return fail(f"key file not found: {kp}")
-        if name in oci_config.read_profiles() and not overwrite:
+        cfg, cfg_err = self._config()
+        if cfg_err:
+            return fail(cfg_err)
+        if name in cfg and not overwrite:
             return fail(f"profile {name} already exists; enable overwrite to replace it")
 
         pub_pem = ""
@@ -247,8 +314,9 @@ class OCIProvider(Provider):
             existing = [p for p in (OCI_KEYS_DIR / f"{name}.pem", OCI_KEYS_DIR / f"{name}_public.pem") if p.exists()]
             if existing:
                 return fail(
-                    f"key files already exist at {existing[0]}; pass key_file={existing[0]} "
-                    "to reuse them, or remove them to generate a new key pair "
+                    f"key files already exist at {existing[0]}; to reuse them enter that path in the "
+                    "Key file field (CLI: --key-file) instead of generating, or remove them to "
+                    "generate a new key pair "
                     "(overwrite applies to the profile only)"
                 )
         try:
@@ -260,6 +328,7 @@ class OCIProvider(Provider):
             else:
                 key_path = str(kp)
                 fingerprint = oci_config.fingerprint_for_key(kp)
+                pub_pem = oci_config.public_pem_for_key(kp)
         except FileExistsError as exc:
             return fail(f"key files already exist: {exc}")
         except (RuntimeError, OSError) as exc:
@@ -310,8 +379,10 @@ class OCIProvider(Provider):
             )
         return LoginResult(ok=False, message=msg, output=output)
 
-    def logout(self, profile: str | None = None) -> LoginResult:
-        cfg = oci_config.read_profiles()
+    def logout(self, profile: str | None = None, *, confirm: bool = False) -> LoginResult:
+        cfg, cfg_err = self._config()
+        if cfg_err:
+            return LoginResult(ok=False, message=cfg_err)
         target = self._pick_profile(profile, cfg)
         if not target or target not in cfg:
             return LoginResult(ok=False, message="no OCI profile to log out of")
@@ -323,9 +394,21 @@ class OCIProvider(Provider):
                     "profiles. Remove the profile from ~/.oci/config to forget it."
                 ),
             )
+        if not confirm:
+            # `oci session terminate` deletes the whole profile and its ~/.oci/sessions/<profile> dir.
+            return ConfirmationRequired(
+                ok=False,
+                message=(
+                    f"Logging out terminates the session AND the profile {target} will be REMOVED from "
+                    f"~/.oci/config (its ~/.oci/sessions/{target} directory is deleted too). "
+                    f"To use it again, log in with the session method and profile name {target}."
+                ),
+            )
         rc, out, err = self._run(["oci", "session", "terminate", "--profile", target], timeout=30)
         if rc == 0:
-            return LoginResult(ok=True, message=f"terminated OCI session {target}")
+            return LoginResult(
+                ok=True, message=f"terminated OCI session {target}; profile {target} was removed from ~/.oci/config"
+            )
         return LoginResult(ok=False, message=self._last_line(err, out) or "logout failed")
 
     # --- compartments --------------------------------------------------------
@@ -336,11 +419,15 @@ class OCIProvider(Provider):
         d = settings.get(COMPARTMENT_KEY, {})
         return dict(d) if isinstance(d, dict) else {}
 
-    def _profile_for_compartments(self) -> tuple[str | None, str | None]:
-        """Return (active profile, its tenancy OCID)."""
-        cfg = oci_config.read_profiles()
-        target = self._pick_profile(None, cfg)
-        return target, (cfg.get(target, {}).get("tenancy") if target else None)
+    def _profile_for_compartments(self, profile: str | None = None) -> tuple[str | None, str | None]:
+        """Return (profile, its tenancy OCID); the active profile unless one is given."""
+        target, opts = self._compartment_target(profile)
+        return target, opts.get("tenancy")
+
+    def _compartment_target(self, profile: str | None = None) -> tuple[str | None, dict[str, str]]:
+        cfg, _ = self._config()
+        target = self._pick_profile(profile, cfg)
+        return target, dict(cfg.get(target, {})) if target else {}
 
     @staticmethod
     def _build_paths(tenancy: str, items: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -364,8 +451,9 @@ class OCIProvider(Provider):
             out.append((cid, "/".join(reversed(parts))))
         return sorted(out, key=lambda t: (t[1] != ROOT_LABEL, t[1]))
 
-    def list_secondary(self) -> list[tuple[str, str]]:
-        profile, tenancy = self._profile_for_compartments()
+    def list_secondary(self, profile: str | None = None) -> list[tuple[str, str]]:
+        profile, opts = self._compartment_target(profile)
+        tenancy = opts.get("tenancy")
         if not profile or not tenancy:
             return []
         hit = _compartment_cache.get(profile)
@@ -388,6 +476,8 @@ class OCIProvider(Provider):
                 "json",
                 "--profile",
                 profile,
+                # session profiles only authenticate with this flag (otherwise oci wants an API key)
+                *(["--auth", "security_token"] if opts.get("security_token_file") else []),
             ],
             timeout=60,
         )
@@ -407,8 +497,10 @@ class OCIProvider(Provider):
             settings.set(COMPARTMENT_KEY, saved)
         return list(result)
 
-    def set_secondary(self, sid: str) -> LoginResult:
-        profile, _ = self._profile_for_compartments()
+    def set_secondary(self, sid: str, profile: str | None = None) -> LoginResult:
+        if profile is not None and profile not in self._config()[0]:
+            return LoginResult(ok=False, message=f"profile {profile} not found in OCI config")
+        profile, _ = self._profile_for_compartments(profile)
         if not profile:
             return LoginResult(ok=False, message="no OCI profile selected")
         saved = self._saved_compartments()
