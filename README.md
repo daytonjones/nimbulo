@@ -19,7 +19,7 @@ Every action in the GUI/TUI/menubar is also a CLI subcommand. Run `cloud-login -
 
 ## Install
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). Tested on Python 3.12 and 3.13 (on Python 3.15, PySide6 6.12 breaks Textual's worker threads when the GUI and TUI run in one process).
 
 ```bash
 # Install globally so `cloud-login` is on PATH everywhere
@@ -64,7 +64,7 @@ cloud-login subscriptions                # Azure
 cloud-login compartments                 # OCI
 cloud-login set-project <project-id>     # GCP
 cloud-login set-subscription <sub-id>    # Azure
-cloud-login set-compartment <ocid>     # OCI
+cloud-login set-compartment <ocid>       # OCI
 
 cloud-login logout aws                   # `aws sso logout`
 cloud-login forget vultr                 # delete keyring entry
@@ -78,7 +78,7 @@ Three login methods:
 # Browser session (token-based, expires; refresh by logging in again)
 cloud-login login oci -m session --profile my-profile --region us-ashburn-1
 
-# Use a profile that already exists in ~/.oci/config
+# Use a profile that already exists in ~/.oci/config (it becomes the active profile)
 cloud-login login oci -m profile --profile my-profile
 
 # API key: generate a new key pair (or pass --key-file <path> for an existing one)
@@ -88,13 +88,17 @@ cloud-login login oci -m api-key --profile my-profile --user <user-ocid> \
 
 Missing api-key fields are prompted for; there is no secret to type. Use `--overwrite` to replace an existing profile.
 
+**Session login on an API-key profile.** `oci session authenticate` converts the profile to a session profile (removing its key entries) and rewrites `~/.oci/config` without comments, so cloud-login refuses unless you confirm (GUI/TUI) or pass `--overwrite` (CLI). Use a new profile name to keep the API-key profile.
+
+**Logout removes the profile.** `oci session terminate` deletes the session profile from `~/.oci/config`, so `cloud-login logout oci` asks first (`--yes` skips the prompt); log in with the session method and the same name to recreate it. API-key profiles cannot be logged out.
+
 **Console upload required.** After API-key login the public key is printed; you must upload it in the OCI console (Identity -> Users -> your user -> API keys -> Add API key) before the profile can authenticate.
 
 Compartments:
 
 ```bash
 cloud-login compartments                 # id and path for the active profile
-cloud-login set-compartment <ocid>
+cloud-login set-compartment <ocid>       # add --profile <name> to either for another profile
 ```
 
 Nothing is stored in `~/.oci/config` except standard profile entries; the compartment choice lives in `~/.config/cloud-login/settings.json`.
