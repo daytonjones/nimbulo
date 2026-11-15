@@ -692,9 +692,9 @@ class ProviderTab(QWidget):
         self._set_badge(s.state)
         self._set_strip(s.state)
         ident = s.identity
-        # OCI-derived text (OCIDs, CLI stderr) goes into a RichText label: escape it.
-        # Other providers keep their existing rendering unchanged.
-        esc = html.escape if self.provider.key == "oci" else (lambda x: x)
+        # Provider-derived text (identities, CLI stderr) goes into a RichText label:
+        # always escape it so it cannot inject markup.
+        esc = html.escape
         details: list[str] = []
         if ident:
             if ident.user:

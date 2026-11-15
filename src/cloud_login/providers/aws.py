@@ -16,6 +16,29 @@ CREDENTIALS_FILE = AWS_DIR / "credentials"
 SSO_CACHE_DIR = AWS_DIR / "sso" / "cache"
 
 
+def _write_private(path: Path, cp: configparser.ConfigParser) -> None:
+    """Write ``cp`` to ``path`` atomically with mode 0600 from the first byte.
+
+    The temp file is created 0600 (mkstemp), so secrets are never readable by
+    other users, not even briefly between a write and a later chmod.
+    """
+    import tempfile
+
+    target = Path(os.path.realpath(path))  # keep symlinked dotfiles intact
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            cp.write(f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class AWSProvider(Provider):
     key = "aws"
     label = "AWS"
@@ -154,18 +177,14 @@ class AWSProvider(Provider):
             creds.set(profile, "aws_secret_access_key", secret)
             if session_token:
                 creds.set(profile, "aws_session_token", session_token)
-            with CREDENTIALS_FILE.open("w") as f:
-                creds.write(f)
-            os.chmod(CREDENTIALS_FILE, 0o600)
+            _write_private(CREDENTIALS_FILE, creds)
             if region:
                 cfg = self._read_config()
                 section = "default" if profile == "default" else f"profile {profile}"
                 if not cfg.has_section(section):
                     cfg.add_section(section)
                 cfg.set(section, "region", region)
-                with CONFIG_FILE.open("w") as f:
-                    cfg.write(f)
-                os.chmod(CONFIG_FILE, 0o600)
+                _write_private(CONFIG_FILE, cfg)
             return LoginResult(ok=True, message=f"wrote access key to ~/.aws/credentials [{profile}]")
         return LoginResult(ok=False, message=f"unknown login method: {method}")
 

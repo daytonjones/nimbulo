@@ -227,7 +227,8 @@ def test_gui_oci_status_is_escaped_other_providers_unchanged():
     assert "&lt;b&gt;x&lt;/b&gt;" in txt and "&lt;b&gt;u&lt;/b&gt;" in txt and "<b>x</b>" not in txt
     aws = make_tab(AWSProvider())
     aws._on_status_done(ProviderStatus("aws", AuthState.ERROR, **st))
-    assert "<b>x</b>" in aws.detail_label.text() and "<b>u</b>" in aws.detail_label.text()
+    # every provider escapes provider-derived text (security fix)
+    assert "&lt;b&gt;x&lt;/b&gt;" in aws.detail_label.text() and "<b>x</b>" not in aws.detail_label.text()
 
 
 def test_gui_other_providers_unchanged(monkeypatch):
