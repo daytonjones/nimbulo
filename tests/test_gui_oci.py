@@ -12,10 +12,12 @@ import pytest  # noqa: E402
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QThread  # noqa: E402
 from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLineEdit  # noqa: E402
 
 from cloud_login import settings  # noqa: E402
 from cloud_login.models import AuthState, Identity, LoginResult, ProviderStatus  # noqa: E402
+from cloud_login.providers import oci_config  # noqa: E402
 from cloud_login.providers.aws import AWSProvider  # noqa: E402
 from cloud_login.providers.oci import OCIProvider  # noqa: E402
 from cloud_login.ui import gui  # noqa: E402
@@ -31,7 +33,10 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch, tmp_path, qapp):
+def isolated(monkeypatch, tmp_path, qapp, fake_run):
+    # never the real ~/.oci/config or oci CLI, even from background status/compartment workers
+    monkeypatch.setattr(oci_config, "OCI_CONFIG_PATH", tmp_path / "oci-config")
+    monkeypatch.setattr(OCIProvider, "list_secondary", lambda self, profile=None: [])
     monkeypatch.setattr(settings, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(settings, "SETTINGS_FILE", tmp_path / "settings.json")
     monkeypatch.setattr(
@@ -71,8 +76,28 @@ def settle(tab, timeout=5.0):
     raise AssertionError("worker threads did not finish")
 
 
+_TABS: list = []
+
+
+@pytest.fixture(autouse=True)
+def join_tab_threads():
+    """Join every tab's QThreads before the tab can be garbage-collected.
+
+    ``settle`` returns once ``finished`` has been emitted, but the OS thread may still be
+    unwinding; destroying the tab (the threads' parent) then aborts the process.
+    """
+    yield
+    for tab in _TABS:
+        for t in tab.findChildren(QThread):
+            t.quit()
+            t.wait(5000)
+    QApplication.processEvents()
+    _TABS.clear()
+
+
 def make_tab(provider=None):
     tab = gui.ProviderTab(provider or OCIProvider())
+    _TABS.append(tab)
     settle(tab)
     return tab
 
@@ -262,3 +287,128 @@ def test_gui_oci_tab_fits_default_window(themed):
     assert oci.oci_scroll.height() >= 40
     assert oci.oci_scroll.horizontalScrollBar().maximum() == 0
     oci.hide()
+
+
+# --- final review fix wave ----------------------------------------------------
+
+from cloud_login.providers.oci import ConfirmationRequired  # noqa: E402
+
+Yes = gui.QMessageBox.StandardButton.Yes
+No = gui.QMessageBox.StandardButton.No
+
+
+@pytest.fixture
+def dialogs(monkeypatch):
+    """Patch QMessageBox.question; set ``dialogs.answer``; ``dialogs.seen`` records (text, default)."""
+
+    class D:
+        answer = No
+        seen: list = []
+
+    d = D()
+    d.seen = []
+
+    def question(parent, title, text, buttons=None, default=None):
+        d.seen.append((text, default))
+        return d.answer
+
+    monkeypatch.setattr(gui.QMessageBox, "question", question)
+    return d
+
+
+def _confirming_login(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_login(self, method="session", on_output=None, **kw):
+        calls.append({"method": method, **kw})
+        if not kw.get("overwrite"):
+            return ConfirmationRequired(ok=False, message="profile PROD is an API-key profile")
+        return LoginResult(ok=True, message="session login complete")
+
+    monkeypatch.setattr(OCIProvider, "login", fake_login)
+    return calls
+
+
+@pytest.mark.parametrize("answer, retried", [(Yes, True), (No, False)])
+def test_gui_session_login_confirm_retries_with_overwrite(monkeypatch, dialogs, answer, retried):
+    calls = _confirming_login(monkeypatch)
+    dialogs.answer = answer
+    tab = make_tab()
+    tab.profile_combo.addItem("PROD")
+    tab.login_btn.click()
+    settle(tab)
+    assert len(dialogs.seen) == 1
+    text, default = dialogs.seen[0]
+    assert "API-key profile" in text and default == No
+    expected = [{"method": "session", "profile": "PROD"}]
+    if retried:
+        expected.append({"method": "session", "profile": "PROD", "overwrite": True})
+    assert calls == expected
+    assert tab.login_btn.isEnabled()
+
+
+@pytest.mark.parametrize("answer, confirmed", [(Yes, True), (No, False)])
+def test_gui_oci_logout_confirm(monkeypatch, dialogs, answer, confirmed):
+    calls: list[tuple] = []
+
+    def fake_logout(self, profile=None, *, confirm=False):
+        calls.append((profile, confirm))
+        if not confirm:
+            return ConfirmationRequired(ok=False, message="profile PROD will be REMOVED from ~/.oci/config")
+        return LoginResult(ok=True, message="profile PROD was removed")
+
+    monkeypatch.setattr(OCIProvider, "logout", fake_logout)
+    dialogs.answer = answer
+    tab = make_tab()
+    tab.profile_combo.addItem("PROD")
+    tab.logout_btn.click()
+    settle(tab)
+    assert len(dialogs.seen) == 1 and "REMOVED" in dialogs.seen[0][0] and dialogs.seen[0][1] == No
+    assert calls == ([("PROD", False), ("PROD", True)] if confirmed else [("PROD", False)])
+    assert tab.logout_btn.isEnabled()
+
+
+def test_gui_oci_logout_api_key_profile_no_dialog(monkeypatch, dialogs):
+    monkeypatch.setattr(
+        OCIProvider, "logout", lambda self, profile=None, *, confirm=False: LoginResult(ok=False, message="API key")
+    )
+    tab = make_tab()
+    tab.logout_btn.click()
+    settle(tab)
+    assert dialogs.seen == []
+
+
+def test_gui_oci_status_labels_tenancy():
+    tab = make_tab()
+    tab._on_status_done(ProviderStatus("oci", AuthState.AUTHENTICATED, identity=Identity(account="ocid1.tenancy.x")))
+    settle(tab)  # AUTHENTICATED starts a (stubbed) compartment refresh
+    txt = tab.detail_label.text()
+    assert "<b>Tenancy:</b> ocid1.tenancy.x" in txt and "Compartment:" not in txt
+
+
+def test_gui_copy_button_reset_on_new_attempt_and_method_switch(isolated):
+    tab = make_tab()
+    select_method(tab, "api-key")
+    fill(tab)
+    tab.login_btn.click()
+    settle(tab)
+    assert not tab.copy_pubkey_btn.isHidden() and tab._pubkey_pem
+    select_method(tab, "session")
+    assert tab.copy_pubkey_btn.isHidden() and tab._pubkey_pem is None and tab.oci_hint.text() == ""
+    select_method(tab, "api-key")
+    fill(tab)
+    tab.login_btn.click()
+    settle(tab)
+    assert tab._pubkey_pem
+    fill(tab, user="bad")  # a new attempt (even a rejected one) clears the previous key
+    tab.login_btn.click()
+    assert tab.copy_pubkey_btn.isHidden() and tab._pubkey_pem is None and tab.oci_hint.isHidden()
+
+
+def test_gui_region_case_is_normalised(isolated):
+    tab = make_tab()
+    select_method(tab, "api-key")
+    fill(tab, region=" US-Ashburn-1 ")
+    tab.login_btn.click()
+    settle(tab)
+    assert isolated and isolated[0]["region"] == "us-ashburn-1"

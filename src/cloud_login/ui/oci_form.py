@@ -20,7 +20,7 @@ def validate_oci_form(v: dict) -> Optional[str]:
         return "user OCID is not valid (expected ocid1.user.<realm>..<id>)"
     if not oci_config.validate_ocid(v["tenancy"], "tenancy"):
         return "tenancy OCID is not valid (expected ocid1.tenancy.<realm>..<id>)"
-    region = v["region"]
+    region = (v["region"] or "").strip().lower()
     if region not in oci_config.KNOWN_REGIONS:
         near = difflib.get_close_matches(region, oci_config.KNOWN_REGIONS, n=3, cutoff=0.6)
         hint = f"; did you mean {', '.join(near)}?" if near else ""

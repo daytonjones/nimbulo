@@ -7,7 +7,9 @@ import asyncio
 import pytest
 from textual.widgets import Checkbox, Input, Log, Select, Static, TabbedContent
 
+from cloud_login import settings
 from cloud_login.models import LoginResult
+from cloud_login.providers import oci_config
 from cloud_login.providers.oci import OCIProvider
 from cloud_login.ui import tui
 
@@ -17,7 +19,11 @@ FORM_IDS = ["oci-profile", "oci-user", "oci-tenancy", "oci-region", "oci-keyfile
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch):
+def isolated(monkeypatch, tmp_path, fake_run):
+    # never the real ~/.oci/config, oci CLI or settings file
+    monkeypatch.setattr(oci_config, "OCI_CONFIG_PATH", tmp_path / "oci-config")
+    monkeypatch.setattr(settings, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings, "SETTINGS_FILE", tmp_path / "settings.json")
     monkeypatch.setattr(tui.ProviderPane, "refresh_status", lambda self: None)
     monkeypatch.setattr(
         OCIProvider,
@@ -272,3 +278,155 @@ def test_other_panes_layout_unchanged_at_80x24():
             assert app.query_one("#log").outer_size.height == 16
 
     run(go())
+
+
+# --- final review fix wave ----------------------------------------------------
+
+from cloud_login.models import AuthState, Identity, ProviderStatus  # noqa: E402
+from cloud_login.providers.oci import ConfirmationRequired  # noqa: E402
+
+
+def log_text(app):
+    return "\n".join(app.query_one("#log", Log).lines)
+
+
+async def pick_profile(app, pilot, name):
+    app.query_one(TabbedContent).active = "oci"
+    await pilot.pause()
+    sel = app.query_one("#profile-oci", Select)
+    sel.set_options([(name, name)])
+    sel.value = name
+    await pilot.pause()
+
+
+async def press_and_wait(app, pilot, wid):
+    app.query_one(wid).press()
+    await pilot.pause(0.2)
+    await app.workers.wait_for_complete()
+    await pilot.pause(0.2)
+
+
+def test_session_login_does_not_pass_form_region(isolated):
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pick_profile(app, pilot, "PROD")
+            assert app.query_one("#oci-region", Input).value == "eu-frankfurt-1"  # DEFAULT's region
+            await press_and_wait(app, pilot, "#login-oci")
+            await select_method(app, pilot, "profile")
+            await press_and_wait(app, pilot, "#login-oci")
+
+    run(go())
+    assert isolated == [{"method": "session", "profile": "PROD"}, {"method": "profile", "profile": "PROD"}]
+
+
+def test_session_login_api_key_profile_needs_second_press(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_login(self, method="session", on_output=None, **kw):
+        calls.append({"method": method, **kw})
+        if not kw.get("overwrite"):
+            return ConfirmationRequired(ok=False, message="profile PROD is an API-key profile [x]")
+        return LoginResult(ok=True, message="session login complete")
+
+    monkeypatch.setattr(OCIProvider, "login", fake_login)
+
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pick_profile(app, pilot, "PROD")
+            await press_and_wait(app, pilot, "#login-oci")
+            text = log_text(app)
+            assert "API-key profile [x]" in text and "again to confirm" in text
+            await press_and_wait(app, pilot, "#login-oci")
+            assert "session login complete" in log_text(app)
+            # confirmation is single-use
+            await press_and_wait(app, pilot, "#login-oci")
+
+    run(go())
+    assert calls == [
+        {"method": "session", "profile": "PROD"},
+        {"method": "session", "profile": "PROD", "overwrite": True},
+        {"method": "session", "profile": "PROD"},
+    ]
+
+
+def test_pending_confirmation_cleared_by_method_change(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_login(self, method="session", on_output=None, **kw):
+        calls.append({"method": method, **kw})
+        return ConfirmationRequired(ok=False, message="needs confirm")
+
+    monkeypatch.setattr(OCIProvider, "login", fake_login)
+
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pick_profile(app, pilot, "PROD")
+            await press_and_wait(app, pilot, "#login-oci")
+            await select_method(app, pilot, "profile")
+            await select_method(app, pilot, "session")
+            await press_and_wait(app, pilot, "#login-oci")
+
+    run(go())
+    assert all("overwrite" not in c for c in calls) and len(calls) == 2
+
+
+def test_logout_warns_then_confirms(monkeypatch):
+    calls: list[tuple] = []
+
+    def fake_logout(self, profile=None, *, confirm=False):
+        calls.append((profile, confirm))
+        if not confirm:
+            return ConfirmationRequired(ok=False, message="profile PROD will be REMOVED from ~/.oci/config")
+        return LoginResult(ok=True, message="profile PROD was removed")
+
+    monkeypatch.setattr(OCIProvider, "logout", fake_logout)
+
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pick_profile(app, pilot, "PROD")
+            await press_and_wait(app, pilot, "#logout-oci")
+            assert "REMOVED" in log_text(app) and "again to confirm" in log_text(app)
+            await press_and_wait(app, pilot, "#logout-oci")
+            assert "was removed" in log_text(app)
+
+    run(go())
+    assert calls == [("PROD", False), ("PROD", True)]
+
+
+def test_status_labels_tenancy_for_oci():
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            pane = app._panes["oci"]
+            pane.render_status(
+                ProviderStatus("oci", AuthState.AUTHENTICATED, identity=Identity(account="ocid1.tenancy.x"))
+            )
+            await pilot.pause()
+            text = str(app.query_one("#status-oci", Static).render())
+            assert "tenancy: ocid1.tenancy.x" in text and "compartment:" not in text
+            gcp = app._panes["gcp"]
+            gcp.render_status(ProviderStatus("gcp", AuthState.AUTHENTICATED, identity=Identity(account="proj")))
+            await pilot.pause()
+            assert "project: proj" in str(app.query_one("#status-gcp", Static).render())
+
+    run(go())
+
+
+def test_region_case_is_normalised(isolated):
+    async def go():
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await select_method(app, pilot, "api-key")
+            app.query_one("#oci-user", Input).value = USER
+            app.query_one("#oci-tenancy", Input).value = TENANCY
+            app.query_one("#oci-region", Input).value = " US-Ashburn-1 "
+            app.query_one("#oci-generate", Checkbox).value = True
+            await pilot.pause()
+            await press_and_wait(app, pilot, "#login-oci")
+
+    run(go())
+    assert isolated and isolated[0]["region"] == "us-ashburn-1"

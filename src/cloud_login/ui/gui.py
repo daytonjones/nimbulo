@@ -41,6 +41,7 @@ from .. import providers, settings
 from ..models import AuthState, LoginResult, ProviderStatus, Urgency, format_expires
 from ..providers import oci_config
 from ..providers.base import Provider
+from ..providers.oci import ConfirmationRequired
 from .oci_form import validate_oci_form
 
 
@@ -245,6 +246,8 @@ class ProviderTab(QWidget):
         self.oci_hint: QLabel | None = None
         self.copy_pubkey_btn: QPushButton | None = None
         self._pubkey_pem: str | None = None
+        self._oci_login_kwargs: dict[str, Any] = {}  # last OCI login, for a confirmed retry
+        self._oci_logout_profile: str | None = None  # last OCI logout target, for a confirmed retry
         self._build()
         self.refresh_status()
 
@@ -527,8 +530,18 @@ class ProviderTab(QWidget):
         if path:
             self.oci_fields["key_file"].setText(path)
 
+    def _reset_oci_result(self) -> None:
+        """Forget the previous api-key result (public key, Copy button, upload hint)."""
+        self._pubkey_pem = None
+        if self.copy_pubkey_btn is not None:
+            self.copy_pubkey_btn.hide()
+        if self.oci_hint is not None:
+            self.oci_hint.setText("")
+            self.oci_hint.hide()
+
     @Slot()
     def _sync_oci_form(self) -> None:
+        self._reset_oci_result()
         if self.oci_form is not None:
             show = self._selected_method() == "api-key"
             self.oci_form.setVisible(show)
@@ -545,7 +558,7 @@ class ProviderTab(QWidget):
             "profile": f["profile"].text().strip(),
             "user": f["user"].text().strip(),
             "tenancy": f["tenancy"].text().strip(),
-            "region": f["region"].currentText().strip(),
+            "region": f["region"].currentText().strip().lower(),
             "key_file": None if generate else (f["key_file"].text().strip() or None),
             "generate_key": generate,
             "overwrite": f["overwrite"].isChecked(),
@@ -687,7 +700,8 @@ class ProviderTab(QWidget):
             if ident.user:
                 details.append(f"<b>User:</b> {esc(ident.user)}")
             if ident.account:
-                label = self.provider.secondary_label or "Account"
+                # OCI's account is the tenancy OCID, not a compartment
+                label = "Tenancy" if self.provider.key == "oci" else (self.provider.secondary_label or "Account")
                 details.append(f"<b>{label}:</b> {esc(ident.account)}")
             if ident.expires_at:
                 exp_label, urg = format_expires(ident.expires_at)
@@ -825,6 +839,7 @@ class ProviderTab(QWidget):
         elif key == "azure":
             pass
         elif key == "oci":
+            self._reset_oci_result()
             if method == "api-key":
                 values = self.oci_form_values()
                 problem = validate_oci_form(values)
@@ -844,12 +859,21 @@ class ProviderTab(QWidget):
 
         self.login_btn.setEnabled(False)
         self._log(f"login method={method} starting…")
+        if key == "oci":
+            self._oci_login_kwargs = dict(method=method, **kwargs)
         self._start(self.provider.login, self._on_login_done, method=method, **kwargs)
 
     @Slot(object)
     def _on_login_done(self, result: LoginResult) -> None:
         self.login_btn.setEnabled(True)
         self._log(("OK: " if result.ok else "FAIL: ") + result.message)
+        if self.provider.key == "oci" and isinstance(result, ConfirmationRequired):
+            if self._confirm_oci("Convert OCI profile?", result.message):
+                self.login_btn.setEnabled(False)
+                self._log("confirmed; login starting…")
+                self._start(self.provider.login, self._on_login_done, **self._oci_login_kwargs, overwrite=True)
+                return
+            self._log("login cancelled")
         if self.provider.key == "oci" and self.oci_form is not None and self._selected_method() == "api-key":
             self._show_oci_result(result)
         if self.token_edit is not None:
@@ -881,12 +905,35 @@ class ProviderTab(QWidget):
             return
         self.logout_btn.setEnabled(False)
         self._log("logout…")
+        if self.provider.key == "oci":
+            # the provider refuses first (ConfirmationRequired); _on_logout_done asks the user
+            self._oci_logout_profile = self._selected_profile() or None
+            self._start(self.provider.logout, self._on_logout_done, self._oci_logout_profile)
+            return
         self._start(self.provider.logout, self._on_logout_done)
+
+    def _confirm_oci(self, title: str, message: str) -> bool:
+        reply = QMessageBox.question(
+            self,
+            title,
+            message + "\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
 
     @Slot(object)
     def _on_logout_done(self, result: LoginResult) -> None:
         self.logout_btn.setEnabled(True)
         self._log(("OK: " if result.ok else "FAIL: ") + result.message)
+        if self.provider.key == "oci" and isinstance(result, ConfirmationRequired):
+            if self._confirm_oci("Remove OCI profile?", result.message):
+                self.logout_btn.setEnabled(False)
+                self._log("confirmed; logout…")
+                # same profile the warning named, even if the picker changed meanwhile
+                self._start(self.provider.logout, self._on_logout_done, self._oci_logout_profile, confirm=True)
+                return
+            self._log("logout cancelled")
         self.refresh_status()
 
 
