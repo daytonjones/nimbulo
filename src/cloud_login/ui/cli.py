@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import getpass
+import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -178,9 +180,7 @@ def autostart_cmd(
     action: str = typer.Argument("install", help="install | uninstall | status"),
 ) -> None:
     """Manage a launchd LaunchAgent so the menu-bar app starts at macOS login."""
-    import os
     import subprocess
-    from pathlib import Path
 
     if sys.platform != "darwin":
         console.print("[red]autostart is macOS-only[/]")
@@ -216,6 +216,9 @@ def autostart_cmd(
         raise typer.Exit(2)
 
     prog_args = _resolve_cloud_login_program()
+    log_dir = Path.home() / "Library/Logs/cloud-login"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(log_dir, 0o700)
     arg_xml = "\n        ".join(f"<string>{a}</string>" for a in prog_args)
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -234,9 +237,9 @@ def autostart_cmd(
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
-    <string>/tmp/cloud-login-menubar.log</string>
+    <string>{log_dir}/menubar.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/cloud-login-menubar.err</string>
+    <string>{log_dir}/menubar.err</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -290,6 +293,28 @@ def profiles_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vul
         console.print(n)
 
 
+def _resolve_token_arg(token: Optional[str], token_stdin: bool) -> Optional[str]:
+    """Resolve an API token without requiring it on the command line.
+
+    Order: --token-stdin, CLOUD_LOGIN_TOKEN env var, deprecated --token.
+    A token passed as a command-line argument is visible to other local users
+    via `ps`, so --token is kept only for backward compatibility and warns.
+    """
+    if token_stdin:
+        value = sys.stdin.readline().strip()
+        return value or None
+    env = os.environ.get("CLOUD_LOGIN_TOKEN", "").strip()
+    if env:
+        return env
+    if token:
+        console.print(
+            "[yellow]warning:[/] --token exposes the secret in the process list. "
+            "Use --token-stdin, the CLOUD_LOGIN_TOKEN env var, or omit it to be prompted."
+        )
+        return token
+    return None
+
+
 @app.command("login")
 def login_cmd(
     provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr|digitalocean"),
@@ -299,7 +324,8 @@ def login_cmd(
     subscription: Optional[str] = typer.Option(None, "--subscription", help="Azure subscription to activate after login"),
     tenant: Optional[str] = typer.Option(None, "--tenant", help="Azure tenant ID (for `az login --tenant`)"),
     region: Optional[str] = typer.Option(None, "--region", help="AWS region (with --method access-key) or OCI region"),
-    token: Optional[str] = typer.Option(None, "--token", help="API key/token (Vultr/DO). Omit to be prompted."),
+    token: Optional[str] = typer.Option(None, "--token", help="DEPRECATED (visible in `ps`): use --token-stdin or CLOUD_LOGIN_TOKEN.", hidden=True),
+    token_stdin: bool = typer.Option(False, "--token-stdin", help="read the API token (Vultr/DO) from stdin"),
     user: Optional[str] = typer.Option(None, "--user", help="OCI user OCID (oci -m api-key)"),
     tenancy: Optional[str] = typer.Option(None, "--tenancy", help="OCI tenancy OCID (oci -m api-key)"),
     key_file: Optional[str] = typer.Option(None, "--key-file", help="existing OCI API private key (oci -m api-key)"),
@@ -336,8 +362,9 @@ def login_cmd(
     elif provider in {"vultr", "digitalocean"}:
         # Only set kwargs["token"] if the user supplied one; otherwise let
         # provider.login() resolve from env → CLI config file → keyring.
-        if token:
-            kwargs["token"] = token
+        resolved = _resolve_token_arg(token, token_stdin)
+        if resolved:
+            kwargs["token"] = resolved
     safe = escape if p.key == "oci" else (lambda s: s)  # OCI messages carry user-provided text
     result = p.login(method=method, on_output=lambda line: console.print(f"[dim]{safe(line)}[/]"), **kwargs)
     style = "green" if result.ok else "red"
@@ -490,12 +517,14 @@ def forget_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr
 @app.command("set-key")
 def set_key_cmd(
     provider: str = typer.Argument(..., help="vultr|digitalocean"),
-    token: Optional[str] = typer.Option(None, "--token", help="omit to be prompted"),
+    token: Optional[str] = typer.Option(None, "--token", help="DEPRECATED (visible in `ps`): use --token-stdin or CLOUD_LOGIN_TOKEN.", hidden=True),
+    token_stdin: bool = typer.Option(False, "--token-stdin", help="read the API token from stdin"),
 ) -> None:
     """Store/replace an API key for Vultr or Digital Ocean (alias for `login`)."""
     if provider not in {"vultr", "digitalocean"}:
         console.print("[red]set-key only applies to vultr and digitalocean[/]")
         raise typer.Exit(2)
+    token = _resolve_token_arg(token, token_stdin)
     if not token:
         token = getpass.getpass(f"{provider} API token: ")
     p = providers.get(provider)

@@ -111,7 +111,7 @@ cloud-login autostart status       # check whether it's installed and loaded
 cloud-login autostart uninstall    # remove the LaunchAgent
 ```
 
-The launchd plist runs `cloud-login menubar`. After install, it'll start automatically on next login; logs go to `/tmp/cloud-login-menubar.{log,err}`.
+The launchd plist runs `cloud-login menubar`. After install, it'll start automatically on next login; logs go to `~/Library/Logs/cloud-login/menubar.{log,err}` (a private, owner-only directory). Re-run `cloud-login autostart install` to move an existing install off the old `/tmp` log paths.
 
 ## Where things live
 
