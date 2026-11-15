@@ -94,7 +94,11 @@ def read_profiles() -> dict[str, dict[str, str]]:
     Section values are MERGED with ``[DEFAULT]`` (as the oci CLI does). Raises
     OCIConfigError if the file exists but cannot be read or parsed.
     """
-    if not OCI_CONFIG_PATH.exists() and not OCI_CONFIG_PATH.is_symlink():
+    try:
+        present = OCI_CONFIG_PATH.exists() or OCI_CONFIG_PATH.is_symlink()
+    except OSError as exc:  # e.g. PermissionError: ~/.oci is not accessible
+        raise OCIConfigError(f"{OCI_CONFIG_PATH} could not be read: {_short_reason(exc)}") from None
+    if not present:
         return {}
     cp = configparser.RawConfigParser()
     cp.optionxform = str  # type: ignore[assignment,method-assign]
@@ -178,11 +182,14 @@ def write_api_key_profile(
     if not name or "]" in name:
         raise ValueError("invalid profile name")
     # Resolve symlinks first so the temp file lives next to (and replaces) the real target.
-    target = OCI_CONFIG_PATH.resolve()
-    text = ""
-    if target.exists():
-        with open(target, encoding="utf-8", newline="") as f:
-            text = f.read()
+    try:
+        target = OCI_CONFIG_PATH.resolve()
+        text = ""
+        if target.exists():
+            with open(target, encoding="utf-8", newline="") as f:
+                text = f.read()
+    except OSError as exc:
+        raise OCIConfigError(f"{OCI_CONFIG_PATH} could not be read: {_short_reason(exc)}") from None
     lines = text.splitlines(keepends=True)
     headers = _section_headers(lines)
     block = f"[{name}]\n" + "".join(f"{k}={v}\n" for k, v in values.items())

@@ -347,7 +347,7 @@ class OCIProvider(Provider):
         except FileExistsError:
             self._discard(generated)
             return fail(f"profile {name} already exists; enable overwrite to replace it")
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, oci_config.OCIConfigError) as exc:
             self._discard(generated)
             return fail(f"could not write OCI config: {exc}")
         if on_output:

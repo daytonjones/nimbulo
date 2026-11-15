@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.1] - 2026-11-15
+
+### Fixed
+
+- OCI: an inaccessible `~/.oci` directory now shows a clean error status (and a clean login failure) instead of raising `PermissionError`.
 
 ### Security
 
