@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+
+- `--token` exposed API keys in the process list. Prefer `--token-stdin` or the `CLOUD_LOGIN_TOKEN` environment variable (or omit it to be prompted); `--token` still works but prints a warning.
+- The launchd menubar agent logged to world-readable `/tmp`. Logs now go to `~/Library/Logs/cloud-login/` (mode 0700). Re-run `cloud-login autostart install` to update an existing install.
+- AWS `access-key` login wrote `~/.aws/credentials` and `config` and only then restricted them to 0600. They are now created 0600 and replaced atomically.
+- The GUI status panel now HTML-escapes provider-derived text for every provider (previously only OCI).
+
 ## [0.2.0] - 2026-11-14
 
 ### Added
