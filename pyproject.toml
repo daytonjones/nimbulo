@@ -1,7 +1,7 @@
 [project]
 name = "cloud-login"
-version = "0.1.0"
-description = "Manage logins across AWS, GCP, Azure, Vultr, and DigitalOcean from CLI/TUI/GUI"
+version = "0.2.0"
+description = "Manage logins across AWS, GCP, Azure, OCI, Vultr, and DigitalOcean from CLI/TUI/GUI"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -36,8 +36,24 @@ target-version = "py312"
 select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.per-file-ignores]
-# Recovered baseline source is kept verbatim.
-"src/cloud_login/**" = ["E501", "F401", "I001"]
+# Recovered baseline source is kept verbatim (only additive OCI edits). Files written for
+# OCI (providers/oci.py, providers/oci_config.py, ui/oci_form.py) and tests get full lint.
+"src/cloud_login/__init__.py" = ["E501", "F401", "I001"]
+"src/cloud_login/__main__.py" = ["E501", "F401", "I001"]
+"src/cloud_login/models.py" = ["E501", "F401", "I001"]
+"src/cloud_login/secrets.py" = ["E501", "F401", "I001"]
+"src/cloud_login/settings.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/__init__.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/aws.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/azure.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/base.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/digitalocean.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/gcp.py" = ["E501", "F401", "I001"]
+"src/cloud_login/providers/vultr.py" = ["E501", "F401", "I001"]
+"src/cloud_login/ui/cli.py" = ["E501", "F401", "I001"]
+"src/cloud_login/ui/gui.py" = ["E501", "F401", "I001"]
+"src/cloud_login/ui/menubar.py" = ["E501", "F401", "I001"]
+"src/cloud_login/ui/tui.py" = ["E501", "F401", "I001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

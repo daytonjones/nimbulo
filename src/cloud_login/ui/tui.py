@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Optional
 
+from rich.markup import escape
+from rich.text import Text
+
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button,
+    Checkbox,
     Footer,
     Header,
     Input,
@@ -21,6 +25,8 @@ from textual.widgets import (
 from .. import providers
 from ..models import AuthState, ProviderStatus, Urgency, format_expires
 from ..providers.base import Provider
+from ..providers.oci import ConfirmationRequired
+from .oci_form import validate_oci_form  # noqa: F401 (re-exported)
 
 
 def _badge(state: AuthState) -> str:
@@ -41,11 +47,15 @@ class ProviderPane(Vertical):
     def __init__(self, provider: Provider) -> None:
         super().__init__()
         self.provider = provider
+        if provider.key == "oci":
+            self.add_class("-oci")
         self._status_widget: Static | None = None
         self._profile_select: Select | None = None
         self._method_select: Select | None = None
         self._secondary_select: Select | None = None
         self._token_input: Input | None = None
+        # OCI: a refused destructive action awaiting a second press, e.g. ("logout", "PROD")
+        self._pending_confirm: tuple | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id=f"status-{self.provider.key}", classes="status")
@@ -101,6 +111,9 @@ class ProviderPane(Vertical):
                 password=True,
             )
 
+        if self.provider.key == "oci":
+            yield from self._compose_oci_form()
+
         with Horizontal(classes="row"):
             yield Button("Refresh", id=f"refresh-{self.provider.key}", variant="default")
             yield Button("Login / Re-auth", id=f"login-{self.provider.key}", variant="primary")
@@ -109,7 +122,29 @@ class ProviderPane(Vertical):
             else:
                 yield Button("Logout", id=f"logout-{self.provider.key}", variant="warning")
 
+    def _compose_oci_form(self) -> ComposeResult:
+        try:
+            defaults = self.provider.api_key_defaults()
+        except Exception:
+            defaults = {}
+        with Vertical(id="oci-form"):
+            with Horizontal(classes="oci-row"):
+                yield Input(value=defaults.get("profile", ""), placeholder="profile name", id="oci-profile")
+                yield Input(value=defaults.get("region", ""), placeholder="region (us-ashburn-1)", id="oci-region")
+            with Horizontal(classes="oci-row"):
+                yield Input(placeholder="user OCID (ocid1.user.oc1..…)", id="oci-user")
+            with Horizontal(classes="oci-row"):
+                yield Input(placeholder="tenancy OCID (ocid1.tenancy.oc1..…)", id="oci-tenancy")
+            with Horizontal(classes="oci-row"):
+                yield Input(placeholder="existing private key file (.pem)", id="oci-keyfile")
+                yield Checkbox("Generate a new key pair", id="oci-generate")
+            with Horizontal(classes="oci-row"):
+                yield Checkbox("Overwrite existing profile", id="oci-overwrite")
+                yield Static("", id="oci-msg")
+
     def on_mount(self) -> None:
+        if self.provider.key == "oci":
+            self._sync_oci_form()
         self._status_widget = self.query_one(f"#status-{self.provider.key}", Static)
         for attr, css_id in [
             ("_profile_select", f"#profile-{self.provider.key}"),
@@ -128,21 +163,25 @@ class ProviderPane(Vertical):
 
     def render_status(self, s: ProviderStatus) -> None:
         ident = s.identity
+        esc = escape if self.provider.key == "oci" else (lambda x: x)
         lines = [f"[b]{self.provider.label}[/]   {_badge(s.state)}"]
         if ident:
             if ident.user:
-                lines.append(f"user: {ident.user}")
+                lines.append(f"user: {esc(ident.user)}")
             if ident.account:
+                # OCI's account is the tenancy OCID, not a compartment
                 label = (self.provider.secondary_label or "account").lower()
-                lines.append(f"{label}: {ident.account}")
+                if self.provider.key == "oci":
+                    label = "tenancy"
+                lines.append(f"{label}: {esc(str(ident.account))}")
             if ident.expires_at:
                 exp_label, urg = format_expires(ident.expires_at)
                 color = {Urgency.OK: "green", Urgency.SOON: "yellow", Urgency.EXPIRED: "red"}[urg]
                 lines.append(f"expires: [{color}]{exp_label}[/]")
         if s.active_profile:
-            lines.append(f"active: {s.active_profile}")
+            lines.append(f"active: {esc(s.active_profile)}")
         if s.message:
-            lines.append(f"[dim]{s.message}[/]")
+            lines.append(f"[dim]{esc(s.message)}[/]")
         if self._status_widget is not None:
             self._status_widget.update("\n".join(lines))
         if self._profile_select is not None:
@@ -150,6 +189,59 @@ class ProviderPane(Vertical):
             self._profile_select.set_options(opts)
             if s.active_profile and s.active_profile in s.profiles:
                 self._profile_select.value = s.active_profile
+
+    # --- OCI api-key form (oci only) ---------------------------------------
+
+    def _sync_oci_form(self) -> None:
+        self.query_one("#oci-form").display = self.selected_method() == "api-key"
+        if hasattr(self.app, "_update_compact"):
+            self.app._update_compact()
+
+    def _set_oci_message(self, msg: str) -> None:
+        # Text() is never parsed as markup, so brackets in user data are safe.
+        self.query_one("#oci-msg", Static).update(Text(msg, style="red") if msg else "")
+
+    def oci_form_values(self) -> dict:
+        def val(wid: str) -> str:
+            return self.query_one(f"#{wid}", Input).value.strip()
+
+        generate = self.query_one("#oci-generate", Checkbox).value
+        return {
+            "profile": val("oci-profile"),
+            "user": val("oci-user"),
+            "tenancy": val("oci-tenancy"),
+            "region": val("oci-region").lower(),
+            "key_file": None if generate else (val("oci-keyfile") or None),
+            "generate_key": generate,
+            "overwrite": self.query_one("#oci-overwrite", Checkbox).value,
+        }
+
+    @on(Select.Changed)
+    def _oci_method_changed(self, event: Select.Changed) -> None:
+        if self.provider.key == "oci" and event.select.id == "method-oci":
+            self._pending_confirm = None
+            self._sync_oci_form()
+
+    @on(Checkbox.Changed, "#oci-generate")
+    def _oci_generate_changed(self, event: Checkbox.Changed) -> None:
+        self.query_one("#oci-keyfile", Input).disabled = event.value
+
+    @on(Input.Submitted)
+    def _oci_input_submitted(self, event: Input.Submitted) -> None:
+        wid = event.input.id or ""
+        if self.provider.key != "oci" or not wid.startswith("oci-"):
+            return
+        event.stop()
+        order = ["oci-profile", "oci-user", "oci-tenancy", "oci-region", "oci-keyfile"]
+        gen = self.query_one("#oci-generate", Checkbox).value
+        last = "oci-region" if gen else "oci-keyfile"
+        if wid == last:
+            self.app._login_pressed(self)
+        elif wid in order:
+            nxt = order[order.index(wid) + 1]
+            if gen and nxt == "oci-keyfile":
+                nxt = "oci-region"
+            self.query_one(f"#{nxt}").focus()
 
     def render_secondary(self, items: list[tuple[str, str]]) -> None:
         if self._secondary_select is None:
@@ -216,6 +308,13 @@ class CloudLoginTUI(App):
     Select { width: 38; margin-right: 2; }
     Input { width: 60; }
     Button { margin-right: 1; }
+    ProviderPane.-oci { overflow-y: auto; }
+    #oci-form { height: auto; padding: 0 1; }
+    .oci-row { height: 1; padding: 0; }
+    #oci-form Input { height: 1; border: none; padding: 0 1; width: 1fr; margin-right: 1; }
+    #oci-form Checkbox { height: 1; border: none; padding: 0; width: auto; }
+    #oci-msg { height: auto; width: 1fr; padding: 0 1; }
+    CloudLoginTUI.-oci-compact #log { height: 6; }
     #log { height: 16; border: solid $primary; }
     """
     BINDINGS = [
@@ -238,6 +337,24 @@ class CloudLoginTUI(App):
                     yield pane
         yield Log(id="log", highlight=True)
         yield Footer()
+
+    def _update_compact(self, active: str | None = None) -> None:
+        """OCI tab with the api-key form open: shrink the log so the whole form fits at 80x24."""
+        pane = self._panes.get("oci")
+        on = False
+        if pane is not None:
+            try:
+                on = (
+                    (active or self.query_one(TabbedContent).active) == "oci"
+                    and pane.query_one("#oci-form").display
+                )
+            except Exception:
+                on = False
+        self.set_class(on, "-oci-compact")
+
+    @on(TabbedContent.TabActivated)
+    def _on_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        self._update_compact(event.pane.id)
 
     def _log(self, msg: str) -> None:
         self.query_one("#log", Log).write_line(msg)
@@ -277,7 +394,7 @@ class CloudLoginTUI(App):
             pane.refresh_status()
             self._log(f"[{key}] refreshing…")
         elif action == "login":
-            self._do_login(pane)
+            self._login_pressed(pane)
         elif action == "logout":
             self._do_logout(pane)
         elif action == "forget":
@@ -286,6 +403,14 @@ class CloudLoginTUI(App):
             self._do_set_secondary(pane)
         elif action == "refreshsec":
             pane.refresh_secondary()
+
+    def _login_pressed(self, pane: ProviderPane) -> None:
+        if pane.provider.key == "oci" and pane.selected_method() == "api-key":
+            problem = validate_oci_form(pane.oci_form_values())
+            pane._set_oci_message(problem or "")
+            if problem:
+                return
+        self._do_login(pane)
 
     def _on_output(self, key: str, line: str) -> None:
         if line.strip():
@@ -322,6 +447,18 @@ class CloudLoginTUI(App):
                 kwargs["configuration"] = pane.selected_profile()
         elif provider.key == "azure":
             pass
+        elif provider.key == "oci":
+            if method == "api-key":
+                kwargs.update(self.call_from_thread(pane.oci_form_values))
+            else:
+                # no region: login() uses the selected profile's own region (the form's region
+                # belongs to the api-key form and is pre-filled from another profile)
+                if pane.selected_profile():
+                    kwargs["profile"] = pane.selected_profile()
+                pending = ("login", method, kwargs.get("profile"))
+                if pane._pending_confirm == pending:
+                    kwargs["overwrite"] = True
+                pane._pending_confirm = None
         elif provider.key in {"vultr", "digitalocean"}:
             token = (pane.token_value() or "").strip()
             if token:
@@ -337,14 +474,37 @@ class CloudLoginTUI(App):
         self.call_from_thread(
             self._log, f"[{provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
         )
+        if provider.key == "oci" and isinstance(result, ConfirmationRequired):
+            pane._pending_confirm = ("login", method, kwargs.get("profile"))
+            self.call_from_thread(self._log, "[oci] press Login / Re-auth again to confirm")
+        if provider.key == "oci" and result.output and method == "api-key":
+            # public key + console upload steps; Log is plain text so brackets are literal
+            for line in result.output.splitlines():
+                self.call_from_thread(self._log, f"[{provider.key}] {line}")
         pane.refresh_status()
 
     @work(thread=True, exclusive=False)
     def _do_logout(self, pane: ProviderPane) -> None:
+        if pane.provider.key == "oci":
+            self._do_oci_logout(pane)
+            return
         result = pane.provider.logout()
         self.call_from_thread(
             self._log, f"[{pane.provider.key}] {'OK' if result.ok else 'FAIL'}: {result.message}"
         )
+        pane.refresh_status()
+
+    def _do_oci_logout(self, pane: ProviderPane) -> None:
+        """OCI logout removes the profile: the first press only warns, a second press confirms."""
+        profile = pane.selected_profile()
+        pending = ("logout", profile)
+        confirm = pane._pending_confirm == pending
+        pane._pending_confirm = None
+        result = pane.provider.logout(profile, confirm=confirm)
+        self.call_from_thread(self._log, f"[oci] {'OK' if result.ok else 'FAIL'}: {result.message}")
+        if isinstance(result, ConfirmationRequired):
+            pane._pending_confirm = pending
+            self.call_from_thread(self._log, "[oci] press Logout again to confirm")
         pane.refresh_status()
 
     @work(thread=True, exclusive=False)

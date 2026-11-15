@@ -5,6 +5,7 @@ from .azure import AzureProvider
 from .base import Provider
 from .digitalocean import DigitalOceanProvider
 from .gcp import GCPProvider
+from .oci import OCIProvider
 from .vultr import VultrProvider
 
 
@@ -13,6 +14,7 @@ def all_providers() -> list[Provider]:
         AWSProvider(),
         GCPProvider(),
         AzureProvider(),
+        OCIProvider(),
         VultrProvider(),
         DigitalOceanProvider(),
     ]
@@ -31,6 +33,7 @@ __all__ = [
     "AWSProvider",
     "GCPProvider",
     "AzureProvider",
+    "OCIProvider",
     "VultrProvider",
     "DigitalOceanProvider",
     "all_providers",

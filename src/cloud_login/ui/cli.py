@@ -6,20 +6,22 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from .. import providers
 from ..models import AuthState, ProviderStatus, Urgency, format_expires
 
 console = Console()
 app = typer.Typer(
-    help="Manage logins across AWS, GCP, Azure, Vultr, and Digital Ocean.",
+    help="Manage logins across AWS, GCP, Azure, OCI, Vultr, and Digital Ocean.",
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=False,
 )
 
-PROVIDER_HELP = "aws|gcp|azure|vultr|digitalocean"
+PROVIDER_HELP = "aws|gcp|azure|oci|vultr|digitalocean"
 
 
 # --- helpers ----------------------------------------------------------------
@@ -50,6 +52,8 @@ def _render_status(statuses: list[ProviderStatus]) -> Table:
     table.add_column("Notes", overflow="fold")
     for s in statuses:
         ident = s.identity
+        # OCI values come from ~/.oci/config and oci CLI output: never parse them as markup.
+        esc = escape if s.provider == "oci" else (lambda x: x)
         expires_text = "-"
         if ident and ident.expires_at:
             label, urg = format_expires(ident.expires_at)
@@ -57,11 +61,11 @@ def _render_status(statuses: list[ProviderStatus]) -> Table:
         table.add_row(
             s.provider,
             f"[{_state_style(s.state)}]{s.state.value}[/]",
-            ident.account if ident and ident.account else "-",
-            ident.user if ident and ident.user else "-",
-            s.active_profile or "-",
+            esc(ident.account) if ident and ident.account else "-",
+            esc(ident.user) if ident and ident.user else "-",
+            esc(s.active_profile) if s.active_profile else "-",
             expires_text,
-            s.message or "",
+            esc(s.message) if s.message else "",
         )
     return table
 
@@ -76,6 +80,34 @@ def _root(ctx: typer.Context) -> None:
         from .gui import run as run_gui
 
         sys.exit(run_gui())
+
+
+def _oci_login_kwargs(p, method, profile, region, user, tenancy, key_file, generate_key, overwrite) -> dict:
+    """Build OCI login kwargs; prompt for missing non-secret api-key fields (no secrets are prompted)."""
+    kwargs: dict = {}
+    if profile:
+        kwargs["profile"] = profile
+    if region:
+        kwargs["region"] = region
+    if method == "session" and overwrite:
+        kwargs["overwrite"] = True  # allow converting an existing API-key profile to a session profile
+    if method != "api-key":
+        return kwargs
+    defaults = p.api_key_defaults()
+    kwargs["profile"] = profile or typer.prompt("OCI profile name", default=defaults.get("profile", "DEFAULT"))
+    kwargs["user"] = user or typer.prompt("User OCID")
+    kwargs["tenancy"] = tenancy or typer.prompt("Tenancy OCID")
+    kwargs["region"] = region or typer.prompt("Region", default=defaults.get("region", "us-ashburn-1"))
+    if not key_file and not generate_key:
+        if typer.confirm("Generate a new API key pair?", default=True):
+            generate_key = True
+        else:
+            key_file = typer.prompt("Path to existing private key file")
+    if key_file:
+        kwargs["key_file"] = key_file
+    kwargs["generate_key"] = generate_key
+    kwargs["overwrite"] = overwrite
+    return kwargs
 
 
 # --- subcommands ------------------------------------------------------------
@@ -237,7 +269,7 @@ def autostart_cmd(
 
 @app.command("status")
 def status_cmd(
-    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="aws|gcp|azure|vultr|digitalocean"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="aws|gcp|azure|oci|vultr|digitalocean"),
     profile: Optional[str] = typer.Option(None, "--profile", help="profile/configuration to inspect"),
 ) -> None:
     """Show authentication status for all providers (or one)."""
@@ -247,7 +279,7 @@ def status_cmd(
 
 
 @app.command("profiles")
-def profiles_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|vultr|digitalocean")) -> None:
+def profiles_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr|digitalocean")) -> None:
     """List configured profiles/configurations for a provider."""
     p = providers.get(provider)
     names = p.profiles()
@@ -260,14 +292,19 @@ def profiles_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|vultr|d
 
 @app.command("login")
 def login_cmd(
-    provider: str = typer.Argument(..., help="aws|gcp|azure|vultr|digitalocean"),
-    method: Optional[str] = typer.Option(None, "--method", "-m", help="sso|access-key|user|adc|user+adc|api-key|token|device-code"),
-    profile: Optional[str] = typer.Option(None, "--profile", help="profile (AWS) or configuration (GCP)"),
+    provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr|digitalocean"),
+    method: Optional[str] = typer.Option(None, "--method", "-m", help="sso|access-key|user|adc|user+adc|api-key|token|device-code|session|profile"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="profile (AWS/OCI) or configuration (GCP)"),
     project: Optional[str] = typer.Option(None, "--project", help="GCP project to activate after login"),
     subscription: Optional[str] = typer.Option(None, "--subscription", help="Azure subscription to activate after login"),
     tenant: Optional[str] = typer.Option(None, "--tenant", help="Azure tenant ID (for `az login --tenant`)"),
-    region: Optional[str] = typer.Option(None, "--region", help="AWS region (with --method access-key)"),
+    region: Optional[str] = typer.Option(None, "--region", help="AWS region (with --method access-key) or OCI region"),
     token: Optional[str] = typer.Option(None, "--token", help="API key/token (Vultr/DO). Omit to be prompted."),
+    user: Optional[str] = typer.Option(None, "--user", help="OCI user OCID (oci -m api-key)"),
+    tenancy: Optional[str] = typer.Option(None, "--tenancy", help="OCI tenancy OCID (oci -m api-key)"),
+    key_file: Optional[str] = typer.Option(None, "--key-file", help="existing OCI API private key (oci -m api-key)"),
+    generate_key: bool = typer.Option(False, "--generate-key", help="generate a new OCI API key pair (oci -m api-key)"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="replace an existing OCI profile (oci -m api-key), or convert an API-key profile (oci -m session)"),
 ) -> None:
     """Re-authenticate against a provider."""
     p = providers.get(provider)
@@ -294,14 +331,19 @@ def login_cmd(
             kwargs["tenant"] = tenant
         if subscription:
             kwargs["subscription"] = subscription
+    elif provider == "oci":
+        kwargs = _oci_login_kwargs(p, method, profile, region, user, tenancy, key_file, generate_key, overwrite)
     elif provider in {"vultr", "digitalocean"}:
         # Only set kwargs["token"] if the user supplied one; otherwise let
         # provider.login() resolve from env → CLI config file → keyring.
         if token:
             kwargs["token"] = token
-    result = p.login(method=method, on_output=lambda line: console.print(f"[dim]{line}[/]"), **kwargs)
+    safe = escape if p.key == "oci" else (lambda s: s)  # OCI messages carry user-provided text
+    result = p.login(method=method, on_output=lambda line: console.print(f"[dim]{safe(line)}[/]"), **kwargs)
     style = "green" if result.ok else "red"
-    console.print(f"[{style}]{result.message}[/]")
+    console.print(f"[{style}]{safe(result.message)}[/]")
+    if p.key == "oci" and method == "api-key" and result.output:
+        console.print(result.output, markup=False, highlight=False)  # public key + console upload steps
     if not result.ok:
         raise typer.Exit(1)
 
@@ -369,10 +411,48 @@ def set_subscription_cmd(
         raise typer.Exit(1)
 
 
+@app.command("compartments")
+def compartments_cmd(
+    profile: Optional[str] = typer.Option(None, "--profile", help="OCI profile (default: the active one)"),
+) -> None:
+    """List OCI compartments (id and path) for the active profile."""
+    p = providers.get("oci")
+    items = p.list_secondary(profile)  # type: ignore[call-arg]
+    if not items:
+        console.print("[yellow]no compartments visible (are you authenticated?)[/]")
+        return
+    table = Table(title=f"{p.label} compartments")
+    table.add_column("Compartment OCID", style="bold", overflow="fold")
+    table.add_column("Path")
+    for cid, path in items:
+        table.add_row(Text(cid), Text(path))
+    console.print(table)
+
+
+@app.command("set-compartment")
+def set_compartment_cmd(
+    compartment: str = typer.Argument(..., help="OCI compartment OCID to use for the active profile"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="OCI profile (default: the active one)"),
+) -> None:
+    """Set the active OCI compartment (stored in cloud-login settings, not ~/.oci/config)."""
+    p = providers.get("oci")
+    result = p.set_secondary(compartment, profile=profile)  # type: ignore[call-arg]
+    style = "green" if result.ok else "red"
+    console.print(f"[{style}]{escape(result.message)}[/]")
+    if not result.ok:
+        raise typer.Exit(1)
+
+
 @app.command("logout")
-def logout_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|vultr|digitalocean")) -> None:
+def logout_cmd(
+    provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr|digitalocean"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="OCI: skip the confirmation (logout removes the profile)"),
+) -> None:
     """Sign out (revoke session) for a provider. For Vultr/DO this is a no-op; use `forget` to delete the stored key."""
     p = providers.get(provider)
+    if p.key == "oci":
+        _oci_logout(p, yes)
+        return
     result = p.logout()
     style = "green" if result.ok else "red"
     console.print(f"[{style}]{result.message}[/]")
@@ -380,8 +460,24 @@ def logout_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|vultr|dig
         raise typer.Exit(1)
 
 
+def _oci_logout(p, yes: bool) -> None:
+    from ..providers.oci import ConfirmationRequired
+
+    result = p.logout()
+    if isinstance(result, ConfirmationRequired):
+        console.print(f"[yellow]{escape(result.message)}[/]")
+        if not yes and not typer.confirm("Continue?", default=False):
+            console.print("[red]logout cancelled[/]")
+            raise typer.Exit(1)
+        result = p.logout(confirm=True)
+    style = "green" if result.ok else "red"
+    console.print(f"[{style}]{escape(result.message)}[/]")
+    if not result.ok:
+        raise typer.Exit(1)
+
+
 @app.command("forget")
-def forget_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|vultr|digitalocean")) -> None:
+def forget_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr|digitalocean")) -> None:
     """Delete stored credentials (e.g. remove Vultr/DO API key from keyring)."""
     p = providers.get(provider)
     result = p.forget()
