@@ -17,6 +17,12 @@ from pathlib import Path
 
 OCI_CONFIG_PATH: Path = Path(os.path.expanduser("~/.oci/config"))
 
+
+def config_path() -> Path:
+    """The OCI config file in use: ``$OCI_CLI_CONFIG_FILE`` (as the oci CLI honors it), else the default."""
+    env = os.environ.get("OCI_CLI_CONFIG_FILE", "").strip()
+    return Path(os.path.expanduser(env)) if env else OCI_CONFIG_PATH
+
 KNOWN_REGIONS: tuple[str, ...] = (
     "us-ashburn-1",
     "us-phoenix-1",
@@ -94,19 +100,20 @@ def read_profiles() -> dict[str, dict[str, str]]:
     Section values are MERGED with ``[DEFAULT]`` (as the oci CLI does). Raises
     OCIConfigError if the file exists but cannot be read or parsed.
     """
+    path = config_path()
     try:
-        present = OCI_CONFIG_PATH.exists() or OCI_CONFIG_PATH.is_symlink()
+        present = path.exists() or path.is_symlink()
     except OSError as exc:  # e.g. PermissionError: ~/.oci is not accessible
-        raise OCIConfigError(f"{OCI_CONFIG_PATH} could not be read: {_short_reason(exc)}") from None
+        raise OCIConfigError(f"{path} could not be read: {_short_reason(exc)}") from None
     if not present:
         return {}
     cp = configparser.RawConfigParser()
     cp.optionxform = str  # type: ignore[assignment,method-assign]
     try:
-        with open(OCI_CONFIG_PATH, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             cp.read_file(f)
     except (configparser.Error, OSError, UnicodeDecodeError) as exc:
-        raise OCIConfigError(f"{OCI_CONFIG_PATH} could not be parsed: {_short_reason(exc)}") from None
+        raise OCIConfigError(f"{path} could not be parsed: {_short_reason(exc)}") from None
     out: dict[str, dict[str, str]] = {}
     if cp.defaults():
         out["DEFAULT"] = dict(cp.defaults())
@@ -182,14 +189,15 @@ def write_api_key_profile(
     if not name or "]" in name:
         raise ValueError("invalid profile name")
     # Resolve symlinks first so the temp file lives next to (and replaces) the real target.
+    path = config_path()
     try:
-        target = OCI_CONFIG_PATH.resolve()
+        target = path.resolve()
         text = ""
         if target.exists():
             with open(target, encoding="utf-8", newline="") as f:
                 text = f.read()
     except OSError as exc:
-        raise OCIConfigError(f"{OCI_CONFIG_PATH} could not be read: {_short_reason(exc)}") from None
+        raise OCIConfigError(f"{path} could not be read: {_short_reason(exc)}") from None
     lines = text.splitlines(keepends=True)
     headers = _section_headers(lines)
     block = f"[{name}]\n" + "".join(f"{k}={v}\n" for k, v in values.items())

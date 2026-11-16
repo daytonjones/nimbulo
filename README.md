@@ -101,6 +101,8 @@ cloud-login compartments                 # id and path for the active profile
 cloud-login set-compartment <ocid>       # add --profile <name> to either for another profile
 ```
 
+If `OCI_CLI_CONFIG_FILE` is set, cloud-login reads and writes that file instead of `~/.oci/config`, exactly as the `oci` CLI does.
+
 Nothing is stored in `~/.oci/config` except standard profile entries; the compartment choice lives in `~/.config/cloud-login/settings.json`.
 
 ## Auto-start the menu bar at macOS login
