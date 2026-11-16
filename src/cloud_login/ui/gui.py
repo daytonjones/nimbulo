@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QCompleter,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -228,6 +230,7 @@ def _section_label(text: str) -> QLabel:
 class ProviderTab(QWidget):
     log_message = Signal(str)
     status_changed = Signal(object)  # carries AuthState
+    threads_idle = Signal()  # emitted when the last worker thread finished
 
     def __init__(self, provider: Provider) -> None:
         super().__init__()
@@ -596,22 +599,30 @@ class ProviderTab(QWidget):
         worker.line.connect(self._on_output_line, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda t=thread, w=worker: self._cleanup(t, w))
+        thread.finished.connect(self._reap_finished, Qt.ConnectionType.QueuedConnection)
         self._threads.append(thread)
         self._workers.append(worker)
         thread.start()
 
-    def _cleanup(self, t: QThread, w: _Worker) -> None:
-        try:
+    @Slot()
+    def _reap_finished(self) -> None:
+        # Runs on the main thread (queued from QThread.finished). The worker is parentless and
+        # was moved to the worker thread, so we never touch its thread affinity or call its
+        # deleteLater (an event posted to a finished thread never runs, and destroying it on
+        # the worker thread deadlocks on the GIL). Instead, once the thread has really
+        # stopped, drop our references so Python destroys the worker here on the main thread,
+        # then let Qt delete the QThread.
+        sender = self.sender()
+        for t, w in list(zip(self._threads, self._workers)):
+            if t is not sender and t.isRunning():
+                continue
+            t.wait()
             self._threads.remove(t)
-        except ValueError:
-            pass
-        try:
             self._workers.remove(w)
-        except ValueError:
-            pass
+            del w
+            t.deleteLater()
+        if not self._threads:
+            self.threads_idle.emit()
 
     # --- presentation -----------------------------------------------------
 
@@ -942,6 +953,12 @@ class ProviderTab(QWidget):
 # ---------------------------------------------------------------------------
 
 
+class _ProvidersDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.provider_boxes: dict[str, QCheckBox] = {}
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -960,17 +977,16 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setIconSize(QSize(22, 22))
+        # Always-visible spot (unlike the collapsible log panel).
+        self.providers_btn = QPushButton("Providers…")
+        self.providers_btn.setFlat(True)
+        self.providers_btn.clicked.connect(self.open_providers_dialog)
+        self.tabs.setCornerWidget(self.providers_btn, Qt.Corner.TopRightCorner)
 
         self._tabs_by_key: dict[str, ProviderTab] = {}
+        self._retired_tabs: list[ProviderTab] = []
         for p in providers.all_providers():
-            tab = ProviderTab(p)
-            tab.log_message.connect(self._append_log)
-            tab.status_changed.connect(lambda state, k=p.key: self._set_tab_state(k, state))
-            self.tabs.addTab(tab, _provider_icon(p.key), p.label)
-            self._tabs_by_key[p.key] = tab
-            # Default to dim until status returns.
-            idx = self.tabs.indexOf(tab)
-            self.tabs.tabBar().setTabTextColor(idx, QColor("#888"))
+            self._add_provider_tab(p, self.tabs.count())
 
         # --- log panel (header + view) lives in its own widget so we can
         # collapse the whole thing via the splitter or the Hide button.
@@ -1024,6 +1040,91 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready")
 
+    def _add_provider_tab(self, p: Provider, index: int) -> ProviderTab:
+        tab = ProviderTab(p)
+        tab.log_message.connect(self._append_log)
+        tab.status_changed.connect(lambda state, k=p.key: self._set_tab_state(k, state))
+        idx = self.tabs.insertTab(index, tab, _provider_icon(p.key), p.label)
+        self._tabs_by_key[p.key] = tab
+        # Default to dim until status returns.
+        self.tabs.tabBar().setTabTextColor(idx, QColor("#888"))
+        return tab
+
+    def _retire_tab(self, tab: ProviderTab) -> None:
+        """Detach a removed tab; keep it alive until its in-flight workers finish."""
+        tab.status_changed.disconnect()
+        tab.hide()
+        self._retired_tabs.append(tab)
+        tab.threads_idle.connect(lambda t=tab: self._reap_tab(t))
+        if not tab._threads:
+            self._reap_tab(tab)
+
+    def _reap_tab(self, tab: ProviderTab) -> None:
+        if tab not in self._retired_tabs:
+            return
+        self._retired_tabs.remove(tab)
+        tab.deleteLater()
+
+    def apply_enabled_providers(self) -> None:
+        """Sync tabs with the enabled providers: add/remove live, keep canonical order."""
+        wanted = providers.all_providers()
+        wanted_keys = [p.key for p in wanted]
+        cur = self.tabs.currentWidget()
+        selected = next((k for k, t in self._tabs_by_key.items() if t is cur), None)
+        for key in [k for k in self._tabs_by_key if k not in wanted_keys]:
+            tab = self._tabs_by_key.pop(key)
+            self.tabs.removeTab(self.tabs.indexOf(tab))
+            self._retire_tab(tab)
+        for i, p in enumerate(wanted):
+            if p.key not in self._tabs_by_key:
+                self._add_provider_tab(p, i)
+        if selected in self._tabs_by_key:
+            self.tabs.setCurrentWidget(self._tabs_by_key[selected])
+        else:
+            self.tabs.setCurrentIndex(0)
+
+    def open_providers_dialog(self) -> None:
+        dlg = self._build_providers_dialog()
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._apply_providers_dialog(dlg)
+
+    def _build_providers_dialog(self) -> _ProvidersDialog:
+        dlg = _ProvidersDialog(self)
+        dlg.setWindowTitle("Providers")
+        dlg.setModal(True)
+        lay = QVBoxLayout(dlg)
+        boxes: dict[str, QCheckBox] = {}
+        for p in providers.all_providers(include_disabled=True):
+            cb = QCheckBox(p.label)
+            cb.setChecked(providers.is_enabled(p.key))
+            boxes[p.key] = cb
+            lay.addWidget(cb)
+
+        def guard() -> None:
+            checked = [cb for cb in boxes.values() if cb.isChecked()]
+            for cb in boxes.values():
+                cb.setEnabled(not (len(checked) == 1 and cb is checked[0]))
+
+        for cb in boxes.values():
+            cb.toggled.connect(guard)
+        guard()
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.provider_boxes = boxes
+        return dlg
+
+    def _apply_providers_dialog(self, dlg: _ProvidersDialog) -> None:
+        boxes = dlg.provider_boxes
+        changes = [(k, cb.isChecked()) for k, cb in boxes.items() if cb.isChecked() != providers.is_enabled(k)]
+        # enable first so disabling never trips the "last provider" guard
+        for key, on in sorted(changes, key=lambda c: not c[1]):
+            ok, msg = providers.set_enabled(key, on)
+            if not ok:
+                self.statusBar().showMessage(msg)
+        self.apply_enabled_providers()
+
     def _set_tab_state(self, key: str, state: AuthState) -> None:
         tab = self._tabs_by_key.get(key)
         if not tab:
@@ -1055,6 +1156,10 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(f"{ts}  {msg}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        for tab in [*self._tabs_by_key.values(), *self._retired_tabs]:
+            for t in tab.findChildren(QThread):
+                t.quit()
+                t.wait(5000)
         g = self.geometry()
         settings.set("gui.window_geometry", [g.x(), g.y(), g.width(), g.height()])
         settings.set("gui.splitter_sizes", list(self.splitter.sizes()))

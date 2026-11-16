@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0] - 2026-11-16
+
+### Added
+
+- Enable or disable providers: `cloud-login providers`, `providers enable <key>`, `providers disable <key>`, stored as `providers.disabled` in `settings.json`. Disabled providers are hidden from the GUI, TUI, menu bar and status output; nothing is deleted and explicit commands (for example `cloud-login login oci`) still work.
+- GUI **Providers…** dialog, TUI `p` modal, and a menu bar **Providers** submenu, all applying changes live. The menu bar re-reads the setting each time it opens, and its tray summary counts only enabled providers.
+
 ## [0.2.1] - 2026-11-15
 
 ### Fixed

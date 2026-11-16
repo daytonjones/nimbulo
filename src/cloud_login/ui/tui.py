@@ -8,6 +8,7 @@ from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Checkbox,
@@ -162,6 +163,8 @@ class ProviderPane(Vertical):
     # --- rendering --------------------------------------------------------
 
     def render_status(self, s: ProviderStatus) -> None:
+        if not self.is_attached:  # pane removed while its worker was in flight
+            return
         ident = s.identity
         esc = escape if self.provider.key == "oci" else (lambda x: x)
         lines = [f"[b]{self.provider.label}[/]   {_badge(s.state)}"]
@@ -254,11 +257,16 @@ class ProviderPane(Vertical):
     @work(thread=True, exclusive=True)
     def refresh_status(self) -> None:
         s = self.provider.status()
-        self.app.call_from_thread(self.render_status, s)
-        if hasattr(self.app, "_update_tab_label"):
-            self.app.call_from_thread(self.app._update_tab_label, self.provider.key, s.state)
-        if self.provider.secondary_label is not None and s.ok:
-            self.refresh_secondary()
+        try:
+            self.app.call_from_thread(self.render_status, s)
+            if hasattr(self.app, "_update_tab_label"):
+                self.app.call_from_thread(self.app._update_tab_label, self.provider.key, s.state)
+            if self.provider.secondary_label is not None and s.ok:
+                self.refresh_secondary()
+        except Exception:
+            # pane removed (Providers modal) or app shutting down mid-flight
+            if self.is_attached:
+                raise
 
     @work(thread=True, exclusive=False)
     def refresh_secondary(self) -> None:
@@ -300,6 +308,55 @@ class ProviderPane(Vertical):
         return self._token_input.value if self._token_input else None
 
 
+class ProvidersScreen(ModalScreen):
+    """Enable/disable providers. Dismisses with {key: bool} on Save, None on Cancel."""
+
+    CSS = """
+    ProvidersScreen { align: center middle; }
+    #prov-dialog { width: 44; height: auto; border: round $primary; background: $surface; padding: 0 1; }
+    #prov-dialog Checkbox { height: 1; border: none; padding: 0; }
+    #prov-buttons { height: 3; align-horizontal: center; }
+    """
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="prov-dialog"):
+            yield Label("Providers")
+            for p in providers.all_providers(include_disabled=True):
+                yield Checkbox(p.label, providers.is_enabled(p.key), id=f"prov-{p.key}")
+            with Horizontal(id="prov-buttons"):
+                yield Button("Save", id="prov-save", variant="primary")
+                yield Button("Cancel", id="prov-cancel")
+
+    def on_mount(self) -> None:
+        self._guard()
+
+    def _guard(self) -> None:
+        """The last checked box cannot be unchecked."""
+        boxes = list(self.query(Checkbox))
+        checked = [b for b in boxes if b.value]
+        for b in boxes:
+            b.disabled = len(checked) == 1 and b is checked[0]
+
+    @on(Checkbox.Changed)
+    def _changed(self, event: Checkbox.Changed) -> None:
+        event.stop()
+        self._guard()
+
+    @on(Button.Pressed, "#prov-save")
+    def _save(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss({b.id[len("prov-"):]: b.value for b in self.query(Checkbox) if b.id})
+
+    @on(Button.Pressed, "#prov-cancel")
+    def _cancel(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class CloudLoginTUI(App):
     CSS = """
     Screen { background: $surface; }
@@ -319,6 +376,7 @@ class CloudLoginTUI(App):
     """
     BINDINGS = [
         ("r", "refresh_all", "Refresh all"),
+        ("p", "providers", "Providers"),
         ("q", "quit", "Quit"),
     ]
 
@@ -375,6 +433,44 @@ class CloudLoginTUI(App):
             tab.label = markup
         except Exception:
             pass
+
+    def action_providers(self) -> None:
+        self.push_screen(ProvidersScreen(), self._providers_saved)
+
+    async def _providers_saved(self, result: dict[str, bool] | None) -> None:
+        if result is None:
+            return
+        changes = [(k, v) for k, v in result.items() if v != providers.is_enabled(k)]
+        # enable first so disabling never trips the "last provider" guard
+        for key, enable in sorted(changes, key=lambda c: not c[1]):
+            ok, msg = providers.set_enabled(key, enable)
+            if not ok:
+                self.notify(msg, severity="error")
+        await self._apply_enabled_providers()
+
+    async def _apply_enabled_providers(self) -> None:
+        """Sync tabs with the enabled providers: add/remove live, keep canonical order."""
+        tabs = self.query_one(TabbedContent)
+        wanted = providers.all_providers()
+        wanted_keys = [p.key for p in wanted]
+        active = tabs.active
+        for key in [k for k in self._panes if k not in wanted_keys]:
+            self._panes.pop(key)
+            await tabs.remove_pane(key)
+        added: list[str] = []
+        for i, p in enumerate(wanted):
+            if p.key in self._panes:
+                continue
+            pane = ProviderPane(p)
+            self._panes[p.key] = pane
+            later = next((k for k in wanted_keys[i + 1:] if k in self._panes and k not in added), None)
+            await tabs.add_pane(TabPane(p.label, pane, id=p.key), before=later)
+            added.append(p.key)
+            self._update_tab_label(p.key, AuthState.UNKNOWN)
+        # keep self._panes in canonical order
+        self._panes = {k: self._panes[k] for k in wanted_keys if k in self._panes}
+        tabs.active = active if active in self._panes else wanted_keys[0]
+        self._update_compact()
 
     def action_refresh_all(self) -> None:
         for pane in self._panes.values():
