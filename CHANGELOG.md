@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- OCI: a profile whose private key is passphrase-protected but has no `pass_phrase` entry now shows a clear error instead of making the `oci` CLI prompt on the terminal (which could hang or garble the UI). All `oci` calls except the browser login now run detached from the terminal as a safety net.
 - OCI: `OCI_CLI_CONFIG_FILE` is honored. Profiles are read from, and API-key profiles written to, that file (as the `oci` CLI does); previously cloud-login always used `~/.oci/config`, so it showed the wrong profiles when the variable was set.
 - OCI: an inaccessible `~/.oci` directory now shows a clean error status (and a clean login failure) instead of raising `PermissionError`.
 

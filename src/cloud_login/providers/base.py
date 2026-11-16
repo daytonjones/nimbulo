@@ -57,7 +57,20 @@ class Provider(ABC):
         return LoginResult(ok=False, message=f"{self.label} has no secondary selector")
 
     @staticmethod
-    def _run(cmd: list[str], timeout: int = 60, input_text: str | None = None) -> tuple[int, str, str]:
+    def _run(
+        cmd: list[str], timeout: int = 60, input_text: str | None = None, no_tty: bool = False
+    ) -> tuple[int, str, str]:
+        """Run a command and capture output.
+
+        ``no_tty=True`` detaches the child from the controlling terminal (new session,
+        stdin closed) so a CLI that wants to prompt (e.g. for a key passphrase, via
+        /dev/tty) fails fast instead of hanging or garbling the UI.
+        """
+        extra: dict = {}
+        if no_tty:
+            extra["start_new_session"] = True
+            if input_text is None:
+                extra["stdin"] = subprocess.DEVNULL
         try:
             proc = subprocess.run(
                 cmd,
@@ -65,6 +78,7 @@ class Provider(ABC):
                 text=True,
                 timeout=timeout,
                 input=input_text,
+                **extra,
             )
             return proc.returncode, proc.stdout, proc.stderr
         except FileNotFoundError as exc:

@@ -103,6 +103,8 @@ cloud-login set-compartment <ocid>       # add --profile <name> to either for an
 
 If `OCI_CLI_CONFIG_FILE` is set, cloud-login reads and writes that file instead of `~/.oci/config`, exactly as the `oci` CLI does.
 
+**Passphrase-protected keys.** The API-key form only accepts unencrypted keys. An existing profile with an encrypted key needs a `pass_phrase` entry in its config (the `oci` CLI reads it from there); without one, cloud-login reports the problem instead of letting `oci` prompt. The session method avoids keys entirely.
+
 Nothing is stored in `~/.oci/config` except standard profile entries; the compartment choice lives in `~/.config/cloud-login/settings.json`.
 
 ## Auto-start the menu bar at macOS login

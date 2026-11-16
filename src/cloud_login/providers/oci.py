@@ -92,6 +92,22 @@ class OCIProvider(Provider):
         except oci_config.OCIConfigError as exc:
             return {}, str(exc)
 
+    def _oci_run(self, cmd: list[str], timeout: int = 60) -> tuple[int, str, str]:
+        """Run an oci command with no terminal, so it can never block on a prompt."""
+        return self._run(cmd, timeout=timeout, no_tty=True)
+
+    @staticmethod
+    def _passphrase_problem(target: str, opts: dict[str, str]) -> str:
+        """Message if the profile's key is encrypted but the profile has no pass_phrase, else ''."""
+        key_file = opts.get("key_file")
+        if key_file and not opts.get("pass_phrase") and oci_config.key_is_encrypted(key_file):
+            return (
+                f"profile {target}: its key file is passphrase-protected but the profile has no pass_phrase, "
+                "so the oci CLI would prompt for it. Add a pass_phrase entry to the profile, use an "
+                "unencrypted key, or log in with the session method instead"
+            )
+        return ""
+
     def _pick_profile(self, profile: str | None, cfg: dict[str, dict[str, str]]) -> str | None:
         if profile:
             return profile
@@ -146,7 +162,7 @@ class OCIProvider(Provider):
         )
         if expires <= datetime.now(timezone.utc):
             return result(AuthState.EXPIRED, "session token expired", ident)
-        rc, out, serr = self._run(
+        rc, out, serr = self._oci_run(
             ["oci", "session", "validate", "--profile", target, "--local"], timeout=SESSION_VALIDATE_TIMEOUT
         )
         notes = " ".join(ln.strip() for ln in serr.splitlines() if ln.strip().startswith("WARNING"))
@@ -167,7 +183,12 @@ class OCIProvider(Provider):
                 profiles=names,
                 message=f"profile {target} is missing: {', '.join(missing)}",
             )
-        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", target], timeout=API_CHECK_TIMEOUT)
+        problem = self._passphrase_problem(target, opts)
+        if problem:
+            return ProviderStatus(
+                self.key, AuthState.ERROR, active_profile=target, profiles=names, message=problem
+            )
+        rc, out, err = self._oci_run(["oci", "iam", "region", "list", "--profile", target], timeout=API_CHECK_TIMEOUT)
         if rc == 0:
             notes = " ".join(ln.strip() for ln in err.splitlines() if ln.strip().startswith("WARNING"))
             ident = Identity(
@@ -358,7 +379,7 @@ class OCIProvider(Provider):
             "API keys -> Add API key -> paste public key."
         )
         output = "\n".join(p for p in (pub_pem.strip(), steps, f"Fingerprint: {fingerprint}") if p)
-        rc, out, err = self._run(["oci", "iam", "region", "list", "--profile", name], timeout=API_CHECK_TIMEOUT)
+        rc, out, err = self._oci_run(["oci", "iam", "region", "list", "--profile", name], timeout=API_CHECK_TIMEOUT)
         if rc == 0:
             return LoginResult(ok=True, message=f"logged in as profile {name}", output=output)
         if rc == 124 or not _is_auth_failure(err + out):
@@ -404,7 +425,7 @@ class OCIProvider(Provider):
                     f"To use it again, log in with the session method and profile name {target}."
                 ),
             )
-        rc, out, err = self._run(["oci", "session", "terminate", "--profile", target], timeout=30)
+        rc, out, err = self._oci_run(["oci", "session", "terminate", "--profile", target], timeout=30)
         if rc == 0:
             return LoginResult(
                 ok=True, message=f"terminated OCI session {target}; profile {target} was removed from ~/.oci/config"
@@ -459,7 +480,7 @@ class OCIProvider(Provider):
         hit = _compartment_cache.get(profile)
         if hit and _clock() - hit[0] < COMPARTMENT_CACHE_TTL:
             return list(hit[1])
-        rc, out, _err = self._run(
+        rc, out, _err = self._oci_run(
             [
                 "oci",
                 "iam",

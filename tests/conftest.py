@@ -120,6 +120,7 @@ class FakeRun:
         self.calls: list[list[str]] = []
         self.streamed: list[list[str]] = []
         self.installed = True
+        self.no_tty: list[bool] = []  # per _run call: was it detached from the terminal
 
     def add(self, cmd: list[str], rc: int = 0, out: str = "", err: str = "", prefix: bool = False) -> None:
         self.table[tuple(cmd)] = (rc, out, err)
@@ -145,8 +146,9 @@ class FakeRun:
 def fake_run(monkeypatch) -> FakeRun:
     fake = FakeRun()
 
-    def _run(cmd, timeout=60, input_text=None):
+    def _run(cmd, timeout=60, input_text=None, no_tty=False):
         fake.calls.append(list(cmd))
+        fake.no_tty.append(no_tty)
         return fake._lookup(cmd)
 
     def _popen_stream(cmd, on_output=None, timeout=600):

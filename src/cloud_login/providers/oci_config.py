@@ -261,6 +261,16 @@ def _write_new(path: Path, data: bytes, mode: int) -> None:
         raise
 
 
+def key_is_encrypted(path: Path | str) -> bool:
+    """True if the private key file is passphrase-protected (PKCS#8 or legacy PEM). False if unreadable."""
+    try:
+        with open(os.path.expanduser(str(path)), "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    return b"BEGIN ENCRYPTED PRIVATE KEY" in head or b"Proc-Type: 4,ENCRYPTED" in head
+
+
 def _format_fingerprint(der: bytes) -> str:
     digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
     return ":".join(digest[i : i + 2] for i in range(0, 32, 2))
