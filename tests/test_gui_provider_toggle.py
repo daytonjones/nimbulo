@@ -167,3 +167,77 @@ def test_removing_tab_with_inflight_status_does_not_crash(monkeypatch):
 def test_providers_button_exists():
     w = make_win()
     assert w.providers_btn.text().startswith("Providers")
+
+
+def test_open_dialog_accept_applies_and_cancel_changes_nothing(monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    w = make_win()
+    state = {"result": QDialog.DialogCode.Rejected}
+
+    def fake_exec(self):
+        self.provider_boxes["gcp"].setChecked(False)
+        return state["result"]
+
+    monkeypatch.setattr(gui._ProvidersDialog, "exec", fake_exec)
+    w.open_providers_dialog()
+    assert tab_keys(w) == KEYS and providers.disabled_keys() == []
+    state["result"] = QDialog.DialogCode.Accepted
+    w.open_providers_dialog()
+    assert "gcp" not in tab_keys(w) and providers.disabled_keys() == ["gcp"]
+
+
+def test_set_enabled_failure_shows_status_message(monkeypatch):
+    w = make_win()
+    monkeypatch.setattr(providers, "set_enabled", lambda k, on: (False, "nope refused"))
+    apply(w, gcp=False)
+    assert w.statusBar().currentMessage() == "nope refused"
+    assert "gcp" in tab_keys(w)
+
+
+def test_readded_tab_refreshes_status():
+    w = make_win()
+    apply(w, gcp=False)
+    apply(w, gcp=True)
+    tab = w._tabs_by_key["gcp"]
+    pump(lambda: not tab._threads)
+    idx = w.tabs.indexOf(tab)
+    assert w.tabs.tabBar().tabTextColor(idx).name() != "#888888" or tab.badge_label.text() != ""
+    assert tab.badge_label.text().lower() == AuthState.UNKNOWN.value.lower()
+
+
+def test_close_with_retired_tab_inflight_joins_threads(monkeypatch):
+    from cloud_login.providers.gcp import GCPProvider
+
+    def slow(self, profile=None):
+        time.sleep(0.3)
+        return ProviderStatus(self.key, AuthState.AUTHENTICATED)
+
+    monkeypatch.setattr(GCPProvider, "status", slow)
+    w = gui.MainWindow()
+    _WINS.append(w)
+    tab = w._tabs_by_key["gcp"]
+    apply(w, gcp=False)
+    w.close()
+    assert not tab.findChildren(QThread) or all(not t.isRunning() for t in tab.findChildren(QThread))
+
+
+def test_providers_button_reachable_with_log_collapsed_and_window_fits(qapp):
+    from qt_material import apply_stylesheet
+
+    apply_stylesheet(qapp, theme=gui.THEME, extra={"density_scale": "-1"})
+    qapp.setStyleSheet(qapp.styleSheet() + "\n" + gui.OVERLAY_QSS)
+    try:
+        w = make_win()
+        w.resize(1040, 760)
+        w.show()
+        QApplication.processEvents()
+        assert w.minimumSizeHint().height() <= 760 and w.minimumSizeHint().width() <= 1040
+        w._toggle_log()
+        QApplication.processEvents()
+        assert w.splitter.sizes()[1] == 0
+        assert not w.providers_btn.visibleRegion().isEmpty()
+        assert w.rect().contains(w.providers_btn.mapTo(w, w.providers_btn.rect().topLeft()))
+        w.hide()
+    finally:
+        qapp.setStyleSheet("")

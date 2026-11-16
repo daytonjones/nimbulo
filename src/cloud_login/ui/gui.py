@@ -947,6 +947,12 @@ class ProviderTab(QWidget):
 # ---------------------------------------------------------------------------
 
 
+class _ProvidersDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.provider_boxes: dict[str, QCheckBox] = {}
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -965,6 +971,11 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setIconSize(QSize(22, 22))
+        # Always-visible spot (unlike the collapsible log panel).
+        self.providers_btn = QPushButton("Providers…")
+        self.providers_btn.setFlat(True)
+        self.providers_btn.clicked.connect(self.open_providers_dialog)
+        self.tabs.setCornerWidget(self.providers_btn, Qt.Corner.TopRightCorner)
 
         self._tabs_by_key: dict[str, ProviderTab] = {}
         self._retired_tabs: list[ProviderTab] = []
@@ -983,10 +994,6 @@ class MainWindow(QMainWindow):
         log_title.setObjectName("sectionLabel")
         log_header.addWidget(log_title)
         log_header.addStretch()
-        self.providers_btn = QPushButton("Providers…")
-        self.providers_btn.setFlat(True)
-        self.providers_btn.clicked.connect(self.open_providers_dialog)
-        log_header.addWidget(self.providers_btn)
         self.collapse_log_btn = QPushButton("Hide")
         self.collapse_log_btn.setFlat(True)
         self.collapse_log_btn.clicked.connect(self._toggle_log)
@@ -1050,9 +1057,6 @@ class MainWindow(QMainWindow):
         if tab not in self._retired_tabs:
             return
         self._retired_tabs.remove(tab)
-        for t in tab.findChildren(QThread):
-            t.quit()
-            t.wait(5000)
         tab.deleteLater()
 
     def apply_enabled_providers(self) -> None:
@@ -1078,8 +1082,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._apply_providers_dialog(dlg)
 
-    def _build_providers_dialog(self) -> QDialog:
-        dlg = QDialog(self)
+    def _build_providers_dialog(self) -> _ProvidersDialog:
+        dlg = _ProvidersDialog(self)
         dlg.setWindowTitle("Providers")
         dlg.setModal(True)
         lay = QVBoxLayout(dlg)
@@ -1102,11 +1106,11 @@ class MainWindow(QMainWindow):
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
-        dlg.provider_boxes = boxes  # type: ignore[attr-defined]
+        dlg.provider_boxes = boxes
         return dlg
 
-    def _apply_providers_dialog(self, dlg: QDialog) -> None:
-        boxes: dict[str, QCheckBox] = dlg.provider_boxes  # type: ignore[attr-defined]
+    def _apply_providers_dialog(self, dlg: _ProvidersDialog) -> None:
+        boxes = dlg.provider_boxes
         changes = [(k, cb.isChecked()) for k, cb in boxes.items() if cb.isChecked() != providers.is_enabled(k)]
         # enable first so disabling never trips the "last provider" guard
         for key, on in sorted(changes, key=lambda c: not c[1]):
@@ -1146,6 +1150,10 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(f"{ts}  {msg}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        for tab in [*self._tabs_by_key.values(), *self._retired_tabs]:
+            for t in tab.findChildren(QThread):
+                t.quit()
+                t.wait(5000)
         g = self.geometry()
         settings.set("gui.window_geometry", [g.x(), g.y(), g.width(), g.height()])
         settings.set("gui.splitter_sizes", list(self.splitter.sizes()))
