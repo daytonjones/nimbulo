@@ -120,12 +120,12 @@ If you only use some of the clouds, hide the rest. Disabled providers disappear 
 }
 ```
 
-Ways to change it (all write the same setting, and the running GUI/TUI/menu bar pick up the change):
+Ways to change it (all write the same setting):
 
 - CLI: `cloud-login providers` lists every provider with its state; `cloud-login providers disable <key>` / `cloud-login providers enable <key>` change it. Keys: `aws`, `gcp`, `azure`, `oci`, `vultr`, `digitalocean`.
 - GUI: the **Providers…** button.
 - TUI: press `p`.
-- Menu bar: the **Providers** submenu (checkable entries). The menu bar also re-reads the setting each time you open it, so changes made elsewhere show up.
+- Menu bar: the **Providers** submenu (checkable entries). A running menu bar re-reads the setting each time you open its menu and every 2 minutes, and updates the GUI window it hosts. A standalone GUI or TUI re-syncs its tabs only when you save its own Providers dialog; otherwise restart it to pick up changes made elsewhere.
 
 At least one provider must stay enabled; if the file disables all of them, all are shown. Disabling only hides a provider: nothing is deleted, no credentials or CLI config are touched, and explicit commands such as `cloud-login login oci` still work for a disabled provider.
 

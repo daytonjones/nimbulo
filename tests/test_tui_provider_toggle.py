@@ -45,8 +45,14 @@ async def set_box(pilot, screen, key, value):
 
 
 async def save(pilot):
+    app = pilot.app
     await pilot.click("#prov-save")
-    await pilot.pause(0.4)
+    for _ in range(100):  # wait (bounded) for the modal to be dismissed
+        await pilot.pause()
+        if not isinstance(app.screen, tui.ProvidersScreen):
+            break
+        await asyncio.sleep(0.02)
+    await pilot.pause()
 
 
 def test_modal_opens_with_six_checkboxes_and_fits():
@@ -91,7 +97,7 @@ def test_reenable_restores_canonical_order():
             await set_box(pilot, screen, "gcp", True)
             await save(pilot)
             assert tab_ids(app) == KEYS
-            assert list(app._panes) == KEYS or set(app._panes) == set(KEYS)
+            assert list(app._panes) == KEYS
             assert providers.disabled_keys() == []
 
     run(go())
@@ -180,6 +186,17 @@ def test_all_disabled_fallback_composes():
         app = tui.CloudLoginTUI()
         async with app.run_test(size=(80, 24)):
             assert tab_ids(app) == KEYS
+
+    run(go())
+
+
+def test_all_disabled_file_modal_boxes_all_checked():
+    async def go():
+        settings.set("providers.disabled", KEYS)
+        app = tui.CloudLoginTUI()
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = await open_modal(app, pilot)
+            assert all(b.value for b in screen.query(Checkbox))
 
     run(go())
 

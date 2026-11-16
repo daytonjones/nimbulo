@@ -76,7 +76,7 @@ def test_uncheck_removes_entry_controller_and_tooltip(qapp):
     a = make(qapp)
     for k in KEYS:
         a._on_status(k, ProviderStatus(k, AuthState.AUTHENTICATED))
-    assert "Oracle" in a.tray.toolTip() or providers.get("oci").label in a.tray.toolTip()
+    assert providers.get("oci").label in a.tray.toolTip()
     toggles(a)["oci"].trigger()
     assert providers.is_enabled("oci") is False
     assert "oci" not in a._provider_actions
@@ -135,6 +135,33 @@ def test_all_disabled_by_hand_falls_back_to_all(qapp):
     settings.set("providers.disabled", KEYS)
     a = make(qapp)
     assert list(a._provider_actions) == KEYS
+
+
+def test_toggle_off_from_all_disabled_state_removes_provider(qapp):
+    settings.set("providers.disabled", KEYS)
+    a = make(qapp)
+    assert all(act.isChecked() for act in toggles(a).values())
+    toggles(a)["gcp"].trigger()
+    assert "gcp" not in a._provider_actions
+    assert settings.get("providers.disabled") == ["gcp"]
+    assert not toggles(a)["gcp"].isChecked()
+
+
+def test_no_qt_thread_warnings_on_refresh(qapp):
+    from PySide6.QtCore import qInstallMessageHandler
+
+    msgs: list[str] = []
+    prev = qInstallMessageHandler(lambda _t, _c, m: msgs.append(m))
+    try:
+        a = make(qapp)
+        for _ in range(3):
+            a.refresh_all()
+            for c in list(a._controllers.values()):
+                c.join()
+            QApplication.processEvents()
+    finally:
+        qInstallMessageHandler(prev)
+    assert not [m for m in msgs if "moveToThread" in m or "Cannot move" in m], msgs
 
 
 def test_toggle_syncs_existing_main_window(qapp):

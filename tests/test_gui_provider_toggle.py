@@ -137,6 +137,30 @@ def test_disabled_via_settings_shows_unchecked():
     assert dlg.provider_boxes["aws"].isChecked()
 
 
+def test_all_disabled_file_dialog_boxes_all_checked():
+    settings.set("providers.disabled", KEYS)
+    w = make_win()
+    assert tab_keys(w) == KEYS
+    dlg = w._build_providers_dialog()
+    assert all(cb.isChecked() for cb in dlg.provider_boxes.values())
+
+
+def test_no_qt_thread_warnings_on_worker_lifecycle():
+    from PySide6.QtCore import qInstallMessageHandler
+
+    msgs: list[str] = []
+    prev = qInstallMessageHandler(lambda _t, _c, m: msgs.append(m))
+    try:
+        w = make_win()
+        for tab in list(w._tabs_by_key.values()):
+            tab.refresh_status()
+        pump(lambda: all(not t._threads for t in w._tabs_by_key.values()))
+    finally:
+        qInstallMessageHandler(prev)
+    assert all(not t._threads for t in w._tabs_by_key.values())
+    assert not [m for m in msgs if "moveToThread" in m or "Cannot move" in m], msgs
+
+
 def test_dialog_rereads_settings_each_open():
     w = make_win()
     assert w._build_providers_dialog().provider_boxes["gcp"].isChecked()
@@ -201,8 +225,6 @@ def test_readded_tab_refreshes_status():
     apply(w, gcp=True)
     tab = w._tabs_by_key["gcp"]
     pump(lambda: not tab._threads)
-    idx = w.tabs.indexOf(tab)
-    assert w.tabs.tabBar().tabTextColor(idx).name() != "#888888" or tab.badge_label.text() != ""
     assert tab.badge_label.text().lower() == AuthState.UNKNOWN.value.lower()
 
 
@@ -219,7 +241,7 @@ def test_close_with_retired_tab_inflight_joins_threads(monkeypatch):
     tab = w._tabs_by_key["gcp"]
     apply(w, gcp=False)
     w.close()
-    assert not tab.findChildren(QThread) or all(not t.isRunning() for t in tab.findChildren(QThread))
+    assert all(not t.isRunning() for t in tab.findChildren(QThread))
 
 
 def test_providers_button_reachable_with_log_collapsed_and_window_fits(qapp):
