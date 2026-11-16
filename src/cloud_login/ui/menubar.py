@@ -86,8 +86,9 @@ class _ProviderController(QObject):
         self._provider = provider
         self._thread: QThread | None = None
         # (thread, worker) pairs not yet reaped. All destruction happens on the
-        # main thread in _reap; never connect a worker's deleteLater to
-        # thread.finished (deadlocks when destroyed on the worker thread).
+        # main thread in _reap (worker references dropped there); never connect a
+        # worker's deleteLater to thread.finished (deadlocks when destroyed on the
+        # worker thread).
         self._live: list[tuple[QThread, _Worker]] = []
         self._retired = False
 
@@ -145,15 +146,20 @@ class _ProviderController(QObject):
 
     @Slot()
     def _reap(self) -> None:
+        # Runs on the main thread (queued from QThread.finished, or called directly). Never call
+        # moveToThread or worker.deleteLater here: the worker's thread has finished, so a
+        # deleteLater event would never run. Dropping the last reference destroys the worker on
+        # the main thread; the QThread is then deleted by Qt.
+        sender = self.sender()
         for pair in list(self._live):
             thread, worker = pair
-            if thread.isRunning():
+            if thread is not sender and thread.isRunning():
                 continue
             thread.wait()
             self._live.remove(pair)
             if self._thread is thread:
                 self._thread = None
-            worker.deleteLater()
+            del worker  # last reference: Python destroys the parentless worker here, on the main thread
             thread.deleteLater()
         if self._retired and not self._live:
             self.idle.emit(self)

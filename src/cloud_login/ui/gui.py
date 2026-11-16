@@ -599,27 +599,28 @@ class ProviderTab(QWidget):
         worker.line.connect(self._on_output_line, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda t=thread, w=worker: self._cleanup(t, w))
+        thread.finished.connect(self._reap_finished, Qt.ConnectionType.QueuedConnection)
         self._threads.append(thread)
         self._workers.append(worker)
         thread.start()
 
-    def _cleanup(self, t: QThread, w: _Worker) -> None:
-        # The worker's Python wrapper must be destroyed on the main thread: if deleteLater ran
-        # in the (finishing) worker thread, ~QObject would need the GIL while the main thread
-        # holds it and waits on a Qt connection mutex -> deadlock. Thread has finished, so
-        # it is safe to pull the worker back here and delete it.
-        w.moveToThread(self.thread())
-        w.deleteLater()
-        try:
+    @Slot()
+    def _reap_finished(self) -> None:
+        # Runs on the main thread (queued from QThread.finished). The worker is parentless and
+        # was moved to the worker thread, so we never touch its thread affinity or call its
+        # deleteLater (an event posted to a finished thread never runs, and destroying it on
+        # the worker thread deadlocks on the GIL). Instead, once the thread has really
+        # stopped, drop our references so Python destroys the worker here on the main thread,
+        # then let Qt delete the QThread.
+        sender = self.sender()
+        for t, w in list(zip(self._threads, self._workers)):
+            if t is not sender and t.isRunning():
+                continue
+            t.wait()
             self._threads.remove(t)
-        except ValueError:
-            pass
-        try:
             self._workers.remove(w)
-        except ValueError:
-            pass
+            del w
+            t.deleteLater()
         if not self._threads:
             self.threads_idle.emit()
 
