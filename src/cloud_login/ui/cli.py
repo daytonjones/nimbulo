@@ -281,6 +281,46 @@ def status_cmd(
     console.print(_render_status(results))
 
 
+providers_app = typer.Typer(help="Show or toggle which providers are enabled.", invoke_without_command=True)
+app.add_typer(providers_app, name="providers")
+
+
+@providers_app.callback()
+def _providers_root(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    table = Table(title="Providers")
+    table.add_column("Key", style="bold")
+    table.add_column("Provider")
+    table.add_column("Enabled")
+    for p in providers.all_providers(include_disabled=True):
+        on = providers.is_enabled(p.key)
+        table.add_row(p.key, p.label or p.key, "[green]yes[/]" if on else "[dim]no[/]")
+    console.print(table)
+
+
+def _toggle(key: str, enabled: bool) -> None:
+    ok, msg = providers.set_enabled(key, enabled)
+    if ok:
+        console.print(escape(msg))
+        return
+    console.print(f"[red]{escape(msg)}[/]")
+    unknown = key.lower() not in [p.key for p in providers.all_providers(include_disabled=True)]
+    raise typer.Exit(2 if unknown else 1)
+
+
+@providers_app.command("enable")
+def providers_enable_cmd(key: str = typer.Argument(..., help=PROVIDER_HELP)) -> None:
+    """Enable a provider."""
+    _toggle(key, True)
+
+
+@providers_app.command("disable")
+def providers_disable_cmd(key: str = typer.Argument(..., help=PROVIDER_HELP)) -> None:
+    """Disable a provider (hidden from status and the UIs)."""
+    _toggle(key, False)
+
+
 @app.command("profiles")
 def profiles_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr|digitalocean")) -> None:
     """List configured profiles/configurations for a provider."""
