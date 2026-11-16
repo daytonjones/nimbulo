@@ -27,14 +27,25 @@ def _load() -> dict[str, Any]:
 
 
 def _save(data: dict[str, Any]) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".settings-", suffix=".tmp")
+    """Atomically write settings, following a symlinked settings.json (dotfile managers).
+
+    The temp file lives next to the REAL target and replaces it, so a symlink is
+    preserved and the target keeps its permissions (0600 for a new file).
+    """
+    target = Path(os.path.realpath(SETTINGS_FILE))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = os.stat(target).st_mode & 0o777
+    except OSError:
+        mode = 0o600
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".settings-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(data, indent=2, sort_keys=True))
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, SETTINGS_FILE)
+        os.chmod(tmp, mode)
+        os.replace(tmp, target)
     except BaseException:
         try:
             os.unlink(tmp)
