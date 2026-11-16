@@ -297,6 +297,8 @@ def _providers_root(ctx: typer.Context) -> None:
         on = providers.is_enabled(p.key)
         table.add_row(p.key, p.label or p.key, "[green]yes[/]" if on else "[dim]no[/]")
     console.print(table)
+    if providers.disables_everything():
+        console.print("[yellow]settings.json disables every provider; showing all[/]")
 
 
 def _toggle(key: str, enabled: bool) -> None:

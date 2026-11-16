@@ -87,6 +87,62 @@ def test_all_disabled_by_hand_returns_all():
     assert _keys() == KEYS
 
 
+def test_all_disabled_file_treated_as_nothing_disabled():
+    settings.set("providers.disabled", list(KEYS))
+    assert providers.disabled_keys() == []
+    assert all(providers.is_enabled(k) for k in KEYS)
+    assert providers.set_enabled("aws", False)[0] is True
+    assert json.loads(settings.SETTINGS_FILE.read_text())["providers"]["disabled"] == ["aws"]
+    assert _keys() == KEYS[1:]
+
+
+def test_cli_all_disabled_file_shows_all_enabled_with_note():
+    settings.set("providers.disabled", list(KEYS))
+    r = runner.invoke(app, ["providers"])
+    assert r.exit_code == 0
+    assert "no" not in r.output.split()
+    assert "disables every provider" in r.output
+    r = runner.invoke(app, ["providers", "disable", "aws"])
+    assert r.exit_code == 0 and "already" not in r.output
+    assert settings.get("providers.disabled") == ["aws"]
+
+
+@pytest.mark.parametrize("content", ["[]", '"x"', "null", "1"])
+def test_non_dict_settings_file_is_ignored(content):
+    settings.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    settings.SETTINGS_FILE.write_text(content)
+    assert settings.get("providers.disabled") is None
+    assert settings.get("a") is None
+    r = runner.invoke(app, ["providers", "disable", "vultr"])
+    assert r.exit_code == 0, r.output
+    assert settings.get("providers.disabled") == ["vultr"]
+    settings.SETTINGS_FILE.write_text(content)
+    settings.set("x.y", 1)
+    assert settings.get("x.y") == 1
+
+
+def test_save_is_atomic_no_temp_leftovers():
+    settings.set("a", 1)
+    settings.set("b", 2)
+    assert sorted(p.name for p in settings.CONFIG_DIR.iterdir()) == ["settings.json"]
+
+
+def test_save_failure_keeps_old_file(monkeypatch):
+    import os
+
+    settings.set("a", 1)
+    before = settings.SETTINGS_FILE.read_text()
+
+    def boom(*a, **k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        settings.set("a", 2)
+    assert settings.SETTINGS_FILE.read_text() == before
+    assert sorted(p.name for p in settings.CONFIG_DIR.iterdir()) == ["settings.json"]
+
+
 # --- CLI ---
 
 

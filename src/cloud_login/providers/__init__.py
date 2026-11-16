@@ -29,9 +29,19 @@ def _disabled_raw() -> set[str]:
 
 
 def disabled_keys() -> list[str]:
-    """Valid disabled provider keys, in canonical order."""
+    """Valid disabled provider keys, in canonical order.
+
+    A file that disables every provider is treated as "nothing disabled".
+    """
     raw = _disabled_raw()
-    return [p.key for p in _all() if p.key in raw]
+    off = [p.key for p in _all() if p.key in raw]
+    return [] if len(off) >= len(_all()) else off
+
+
+def disables_everything() -> bool:
+    """True when settings.json lists every provider as disabled (ignored)."""
+    raw = _disabled_raw()
+    return all(p.key in raw for p in _all())
 
 
 def is_enabled(key: str) -> bool:
@@ -46,9 +56,8 @@ def all_providers(include_disabled: bool = False) -> list[Provider]:
     everything = _all()
     if include_disabled:
         return everything
-    off = _disabled_raw()
-    enabled = [p for p in everything if p.key not in off]
-    return enabled or everything
+    off = disabled_keys()
+    return [p for p in everything if p.key not in off]
 
 
 def set_enabled(key: str, enabled: bool) -> tuple[bool, str]:
@@ -90,6 +99,7 @@ __all__ = [
     "DigitalOceanProvider",
     "all_providers",
     "disabled_keys",
+    "disables_everything",
     "is_enabled",
     "set_enabled",
     "get",
