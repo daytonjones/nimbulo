@@ -599,7 +599,6 @@ class ProviderTab(QWidget):
         worker.line.connect(self._on_output_line, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda t=thread, w=worker: self._cleanup(t, w))
         self._threads.append(thread)
@@ -607,6 +606,12 @@ class ProviderTab(QWidget):
         thread.start()
 
     def _cleanup(self, t: QThread, w: _Worker) -> None:
+        # The worker's Python wrapper must be destroyed on the main thread: if deleteLater ran
+        # in the (finishing) worker thread, ~QObject would need the GIL while the main thread
+        # holds it and waits on a Qt connection mutex -> deadlock. Thread has finished, so
+        # it is safe to pull the worker back here and delete it.
+        w.moveToThread(self.thread())
+        w.deleteLater()
         try:
             self._threads.remove(t)
         except ValueError:
