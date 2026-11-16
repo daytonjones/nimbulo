@@ -66,6 +66,9 @@ cloud-login set-project <project-id>     # GCP
 cloud-login set-subscription <sub-id>    # Azure
 cloud-login set-compartment <ocid>       # OCI
 
+cloud-login providers                    # list providers and whether each is enabled
+cloud-login providers disable oci        # hide a provider (also: enable <key>)
+
 cloud-login logout aws                   # `aws sso logout`
 cloud-login forget vultr                 # delete keyring entry
 ```
@@ -107,6 +110,25 @@ If `OCI_CLI_CONFIG_FILE` is set, cloud-login reads and writes that file instead 
 
 Nothing is stored in `~/.oci/config` except standard profile entries; the compartment choice lives in `~/.config/cloud-login/settings.json`.
 
+## Enabling and disabling providers
+
+If you only use some of the clouds, hide the rest. Disabled providers disappear from the GUI tabs, the TUI tabs, the menu bar, the tray summary, and `cloud-login status`. The choice is stored in `~/.config/cloud-login/settings.json`:
+
+```json
+{
+  "providers": { "disabled": ["vultr", "digitalocean"] }
+}
+```
+
+Ways to change it (all write the same setting, and the running GUI/TUI/menu bar pick up the change):
+
+- CLI: `cloud-login providers` lists every provider with its state; `cloud-login providers disable <key>` / `cloud-login providers enable <key>` change it. Keys: `aws`, `gcp`, `azure`, `oci`, `vultr`, `digitalocean`.
+- GUI: the **Providers…** button.
+- TUI: press `p`.
+- Menu bar: the **Providers** submenu (checkable entries). The menu bar also re-reads the setting each time you open it, so changes made elsewhere show up.
+
+At least one provider must stay enabled; if the file disables all of them, all are shown. Disabling only hides a provider: nothing is deleted, no credentials or CLI config are touched, and explicit commands such as `cloud-login login oci` still work for a disabled provider.
+
 ## Auto-start the menu bar at macOS login
 
 ```bash
@@ -129,7 +151,7 @@ The launchd plist runs `cloud-login menubar`. After install, it'll start automat
 | `~/.vultr-cli.yaml`                        | Vultr CLI config (optional)                      |
 | `~/.config/doctl/config.yaml`              | doctl config (optional)                          |
 | macOS Keychain, service `cloud-login`      | Stored Vultr/DO API keys                         |
-| `~/.config/cloud-login/settings.json`      | App preferences (window geometry, last-selected profile per provider, etc.) |
+| `~/.config/cloud-login/settings.json`      | App preferences (window geometry, last-selected profile per provider, disabled providers, etc.) |
 
 Nothing is read or written outside these. The app never bypasses the underlying CLIs for credential material.
 
