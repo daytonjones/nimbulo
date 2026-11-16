@@ -27,11 +27,90 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
+from cloud_login import settings
+from cloud_login.providers import aws, digitalocean, gcp, oci, oci_config, vultr
 from cloud_login.providers.base import Provider
+
+# --- global isolation guard -------------------------------------------------------
+# Every test runs against a throwaway HOME. Module-level paths (computed at import
+# time from the real ~) are repointed, and the real `oci` CLI cannot be executed.
+# Tests may still override any of these with their own monkeypatch.
+
+_REAL_HOME = Path(os.path.expanduser("~"))
+
+
+def _snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    out: dict[str, tuple[int, int]] = {}
+    if not root.is_dir():
+        return out
+    for p in sorted(root.rglob("*")):
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        out[str(p)] = (st.st_mtime_ns, st.st_size)
+    return out
+
+
+_REAL_OCI_BEFORE = _snapshot(_REAL_HOME / ".oci")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    after = _snapshot(_REAL_HOME / ".oci")
+    if after != _REAL_OCI_BEFORE:
+        changed = sorted(set(after.items()) ^ set(_REAL_OCI_BEFORE.items()))[:5]
+        raise pytest.UsageError(f"tests modified the real ~/.oci (first differences: {changed})")
+
+
+class RealOCIBlocked(AssertionError):
+    pass
+
+
+def _is_oci(cmd) -> bool:
+    argv = cmd if isinstance(cmd, (list, tuple)) else [cmd]
+    return bool(argv) and os.path.basename(str(argv[0])) == "oci"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_home(tmp_path_factory, monkeypatch):
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("OCI_CLI_CONFIG_FILE", raising=False)
+    monkeypatch.setattr(oci_config, "OCI_CONFIG_PATH", home / ".oci" / "config")
+    monkeypatch.setattr(oci, "OCI_KEYS_DIR", home / ".oci" / "keys")
+    monkeypatch.setattr(aws, "AWS_DIR", home / ".aws")
+    monkeypatch.setattr(aws, "CONFIG_FILE", home / ".aws" / "config")
+    monkeypatch.setattr(aws, "CREDENTIALS_FILE", home / ".aws" / "credentials")
+    monkeypatch.setattr(aws, "SSO_CACHE_DIR", home / ".aws" / "sso" / "cache")
+    monkeypatch.setattr(gcp, "GCLOUD_DIR", home / ".config" / "gcloud")
+    monkeypatch.setattr(vultr, "VULTR_CLI_CONFIG", home / ".vultr-cli.yaml")
+    monkeypatch.setattr(digitalocean, "DOCTL_CONFIG", home / ".config" / "doctl" / "config.yaml")
+    monkeypatch.setattr(settings, "CONFIG_DIR", home / ".config" / "cloud-login")
+    monkeypatch.setattr(settings, "SETTINGS_FILE", home / ".config" / "cloud-login" / "settings.json")
+
+    real_run, real_popen = subprocess.run, subprocess.Popen
+
+    def guarded_run(cmd, *a, **kw):
+        if _is_oci(cmd):
+            raise RealOCIBlocked(f"test tried to run the real oci CLI: {cmd!r} (use the fake_run fixture)")
+        return real_run(cmd, *a, **kw)
+
+    class GuardedPopen(real_popen):
+        def __init__(self, cmd, *a, **kw):
+            if _is_oci(cmd):
+                raise RealOCIBlocked(f"test tried to run the real oci CLI: {cmd!r} (use the fake_run fixture)")
+            super().__init__(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", guarded_run)
+    monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+    return home
 
 
 class FakeRun:
