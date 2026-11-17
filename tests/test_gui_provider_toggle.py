@@ -15,9 +15,9 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QThread  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from cloud_login import providers, settings  # noqa: E402
-from cloud_login.models import AuthState, ProviderStatus  # noqa: E402
-from cloud_login.ui import gui  # noqa: E402
+from nimbulo import providers, settings  # noqa: E402
+from nimbulo.models import AuthState, ProviderStatus  # noqa: E402
+from nimbulo.ui import gui  # noqa: E402
 
 KEYS = ["aws", "gcp", "azure", "oci", "vultr", "digitalocean"]
 
@@ -169,7 +169,7 @@ def test_dialog_rereads_settings_each_open():
 
 
 def test_removing_tab_with_inflight_status_does_not_crash(monkeypatch):
-    from cloud_login.providers.gcp import GCPProvider
+    from nimbulo.providers.gcp import GCPProvider
 
     def slow(self, profile=None):
         time.sleep(0.3)
@@ -229,7 +229,7 @@ def test_readded_tab_refreshes_status():
 
 
 def test_close_with_retired_tab_inflight_joins_threads(monkeypatch):
-    from cloud_login.providers.gcp import GCPProvider
+    from nimbulo.providers.gcp import GCPProvider
 
     def slow(self, profile=None):
         time.sleep(0.3)

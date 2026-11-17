@@ -33,8 +33,8 @@
 ### Task 1: Core API and CLI
 
 **Files:**
-- Modify: `src/cloud_login/providers/__init__.py`
-- Modify: `src/cloud_login/ui/cli.py` (new `providers` sub-app; `status` default list)
+- Modify: `src/nimbulo/providers/__init__.py`
+- Modify: `src/nimbulo/ui/cli.py` (new `providers` sub-app; `status` default list)
 - Create: `tests/test_provider_toggle.py`
 
 **Interfaces:**
@@ -47,14 +47,14 @@
 
 - [ ] **Step 1: Tests (failing)** in `tests/test_provider_toggle.py`: default returns six keys in order; after `set_enabled("vultr", False)` `all_providers()` has five and `include_disabled=True` six; `get("vultr")` still works; disabling all six one by one ends with the last refused and unchanged settings; re-enable restores original order; string value / unknown key / `null` in settings do not crash; all-disabled-by-hand returns all six; settings file contains `{"providers": {"disabled": ["vultr"]}}` after disabling vultr. CLI via `CliRunner`: `providers` lists six rows with enabled state; `providers disable oci` then `providers` shows oci disabled; `status` with no args omits oci while `status -p oci` still shows it; `providers disable nope` exits 2 with a message; disabling the last one exits 1 with a message.
 - [ ] **Step 2: Run to confirm failure:** `uv run pytest tests/test_provider_toggle.py -q`
-- [ ] **Step 3: Implement** the four functions above in `providers/__init__.py` (keep a private `_ALL` factory for the canonical list; keys from instances' `.key`). Add `providers_app = typer.Typer()` in `cli.py` mounted as `cloud-login providers` with default callback listing a rich table (Key, Provider, Enabled) and `enable`/`disable` commands taking a key; mirror the style of the existing commands. `status` with no `-p` uses `all_providers()` (already does; confirm).
+- [ ] **Step 3: Implement** the four functions above in `providers/__init__.py` (keep a private `_ALL` factory for the canonical list; keys from instances' `.key`). Add `providers_app = typer.Typer()` in `cli.py` mounted as `nimbulo providers` with default callback listing a rich table (Key, Provider, Enabled) and `enable`/`disable` commands taking a key; mirror the style of the existing commands. `status` with no `-p` uses `all_providers()` (already does; confirm).
 - [ ] **Step 4: Run:** `uv run pytest -q && uv run ruff check src tests` — all green.
 - [ ] **Step 5: Commit** `feat: provider enable/disable core API and CLI`.
 
 ### Task 2: GUI Providers dialog (live)
 
 **Files:**
-- Modify: `src/cloud_login/ui/gui.py` (MainWindow: tabs built from `all_providers()`)
+- Modify: `src/nimbulo/ui/gui.py` (MainWindow: tabs built from `all_providers()`)
 - Create: `tests/test_gui_provider_toggle.py`
 
 **Interfaces:**
@@ -70,7 +70,7 @@
 ### Task 3: TUI Providers modal (live)
 
 **Files:**
-- Modify: `src/cloud_login/ui/tui.py`
+- Modify: `src/nimbulo/ui/tui.py`
 - Create: `tests/test_tui_provider_toggle.py`
 
 **Interfaces:**
@@ -86,7 +86,7 @@
 ### Task 4: Menubar Providers submenu (live) + docs and release notes
 
 **Files:**
-- Modify: `src/cloud_login/ui/menubar.py`
+- Modify: `src/nimbulo/ui/menubar.py`
 - Modify: `README.md`, `CHANGELOG.md`
 - Create: `tests/test_menubar_provider_toggle.py`
 
@@ -98,5 +98,5 @@
 - [ ] **Step 1: Tests (failing, offscreen, same style as `tests/test_menubar_oci.py`)**: submenu has six checked actions; unchecking removes that provider's menu entry and excludes it from the tooltip summary; re-check restores; last-one guard.
 - [ ] **Step 2: Run to confirm failure.**
 - [ ] **Step 3: Implement**, then README/CHANGELOG/version.
-- [ ] **Step 4: Run** full suite + ruff, `uv build`, `uvx twine check dist/*`, clean-venv `cloud-login providers` smoke test.
+- [ ] **Step 4: Run** full suite + ruff, `uv build`, `uvx twine check dist/*`, clean-venv `nimbulo providers` smoke test.
 - [ ] **Step 5: Commit** `feat(menubar): Providers submenu; docs; release 0.3.0`.

@@ -3,10 +3,10 @@ import json
 
 import pytest
 
-from cloud_login import settings
-from cloud_login.models import AuthState
-from cloud_login.providers import oci, oci_config
-from cloud_login.providers.oci import OCIProvider
+from nimbulo import settings
+from nimbulo.models import AuthState
+from nimbulo.providers import oci, oci_config
+from nimbulo.providers.oci import OCIProvider
 
 T = "ocid1.tenancy.oc1..root"
 DEV = "ocid1.compartment.oc1..dev"

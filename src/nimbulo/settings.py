@@ -1,6 +1,6 @@
 """Cross-UI persisted settings.
 
-A small JSON file at ~/.config/cloud-login/settings.json, used by all UIs
+A small JSON file at ~/.config/nimbulo/settings.json, used by all UIs
 (CLI/TUI/GUI/menubar) so things like the last-selected profile survive across
 launches and across UI changes.
 """
@@ -12,15 +12,19 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-CONFIG_DIR = Path(os.path.expanduser("~/.config/cloud-login"))
+CONFIG_DIR = Path(os.path.expanduser("~/.config/nimbulo"))
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
+# This project was named "cloud-login" before it was renamed. Settings saved under the old name are
+# still read (never modified) until the first save writes the new file.
+LEGACY_SETTINGS_FILE = Path(os.path.expanduser("~/.config/cloud-login/settings.json"))
 
 
 def _load() -> dict[str, Any]:
-    if not SETTINGS_FILE.exists():
+    source = SETTINGS_FILE if SETTINGS_FILE.exists() else LEGACY_SETTINGS_FILE
+    if not source.exists():
         return {}
     try:
-        data = json.loads(SETTINGS_FILE.read_text())
+        data = json.loads(source.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}

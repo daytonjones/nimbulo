@@ -129,7 +129,7 @@ class GCPProvider(Provider):
             if kwargs.get("project"):
                 self._run(["gcloud", "config", "set", "project", kwargs["project"]], timeout=15)
             if method == "user":
-                return LoginResult(ok=True, message="gcloud login complete", output=out)
+                return LoginResult(ok=True, message="gnimbulo complete", output=out)
             if on_output:
                 on_output("--- starting application-default (ADC) login ---")
             rc2, out2 = self._popen_stream(

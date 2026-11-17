@@ -962,7 +962,7 @@ class _ProvidersDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("cloud-login")
+        self.setWindowTitle("nimbulo")
         geom = settings.get("gui.window_geometry")
         if isinstance(geom, list) and len(geom) == 4:
             self.setGeometry(*geom)

@@ -7,10 +7,10 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from cloud_login import providers
-from cloud_login.models import LoginResult
-from cloud_login.ui import cli
-from cloud_login.ui.cli import app
+from nimbulo import providers
+from nimbulo.models import LoginResult
+from nimbulo.ui import cli
+from nimbulo.ui.cli import app
 
 runner = CliRunner()
 
@@ -33,7 +33,7 @@ class StubProvider:
 def stub(monkeypatch):
     s = StubProvider()
     monkeypatch.setattr(providers, "get", lambda key: s)
-    monkeypatch.delenv("CLOUD_LOGIN_TOKEN", raising=False)
+    monkeypatch.delenv("NIMBULO_TOKEN", raising=False)
     return s
 
 
@@ -45,7 +45,7 @@ def test_set_key_reads_token_from_stdin(stub):
 
 
 def test_login_reads_token_from_env(stub, monkeypatch):
-    monkeypatch.setenv("CLOUD_LOGIN_TOKEN", "envtok")
+    monkeypatch.setenv("NIMBULO_TOKEN", "envtok")
     r = runner.invoke(app, ["login", "vultr"])
     assert r.exit_code == 0, r.output
     assert stub.kwargs["token"] == "envtok"
@@ -72,8 +72,8 @@ def test_autostart_logs_not_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_kill_running_menubar", lambda: None)
     r = runner.invoke(app, ["autostart", "install"])
     assert r.exit_code == 0, r.output
-    plist = (tmp_path / "Library/LaunchAgents/com.cloud-login.menubar.plist").read_text()
-    log_dir = tmp_path / "Library/Logs/cloud-login"
+    plist = (tmp_path / "Library/LaunchAgents/com.nimbulo.menubar.plist").read_text()
+    log_dir = tmp_path / "Library/Logs/nimbulo"
     assert "/tmp/" not in plist
     assert f"{log_dir}/menubar.log" in plist
     assert stat.S_IMODE(os.stat(log_dir).st_mode) == 0o700

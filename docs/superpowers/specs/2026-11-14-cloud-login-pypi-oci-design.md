@@ -1,3 +1,5 @@
+> **Historical document.** Written when this project was named `cloud-login`; it was later renamed **nimbulo** (module `nimbulo`, command `nimbulo`). Names below are as they were at the time.
+
 # cloud-login: recover, package for PyPI, add OCI
 
 Date: 2026-11-14 · Status: awaiting approval

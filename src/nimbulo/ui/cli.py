@@ -44,7 +44,7 @@ _URGENCY_STYLE = {Urgency.OK: "green", Urgency.SOON: "yellow", Urgency.EXPIRED: 
 
 
 def _render_status(statuses: list[ProviderStatus]) -> Table:
-    table = Table(title="Cloud Login Status", show_lines=False)
+    table = Table(title="Nimbulo Status", show_lines=False)
     table.add_column("Provider", style="bold")
     table.add_column("State")
     table.add_column("Account / Project")
@@ -139,14 +139,14 @@ def menubar_cmd() -> None:
     raise typer.Exit(run_menubar())
 
 
-def _resolve_cloud_login_program() -> list[str]:
-    """Return argv for invoking this `cloud-login` reliably from launchd.
+def _resolve_nimbulo_program() -> list[str]:
+    """Return argv for invoking this `nimbulo` reliably from launchd.
 
     Preference order:
       1. The path *this* process was invoked from (sys.argv[0]) — most accurate
          because it's literally how the user just ran us.
-      2. `shutil.which("cloud-login")` — works if the entry point is on PATH.
-      3. `<python> -m cloud_login` — last-ditch fallback.
+      2. `shutil.which("nimbulo")` — works if the entry point is on PATH.
+      3. `<python> -m nimbulo` — last-ditch fallback.
     """
     import os
     import shutil
@@ -156,22 +156,22 @@ def _resolve_cloud_login_program() -> list[str]:
         candidate = os.path.realpath(candidate)
         if os.path.isabs(candidate) and os.path.exists(candidate) and os.access(candidate, os.X_OK):
             return [candidate, "menubar"]
-    on_path = shutil.which("cloud-login")
+    on_path = shutil.which("nimbulo")
     if on_path:
         return [on_path, "menubar"]
-    return [sys.executable, "-m", "cloud_login", "menubar"]
+    return [sys.executable, "-m", "nimbulo", "menubar"]
 
 
 def _kill_running_menubar() -> None:
-    """Best-effort kill of any running `cloud-login menubar` processes.
+    """Best-effort kill of any running `nimbulo menubar` processes.
 
-    Covers both the `cloud-login menubar` script invocation and the
-    `python -m cloud_login menubar` fallback. Run before re-loading the
+    Covers both the `nimbulo menubar` script invocation and the
+    `python -m nimbulo menubar` fallback. Run before re-loading the
     LaunchAgent so we don't end up with stacked instances.
     """
     import subprocess
 
-    for pattern in ("cloud-login menubar", "cloud_login.*menubar"):
+    for pattern in ("nimbulo menubar", "nimbulo.*menubar"):
         subprocess.run(["pkill", "-f", pattern], capture_output=True)
 
 
@@ -186,8 +186,17 @@ def autostart_cmd(
         console.print("[red]autostart is macOS-only[/]")
         raise typer.Exit(2)
 
-    plist_path = Path.home() / "Library/LaunchAgents/com.cloud-login.menubar.plist"
-    label = "com.cloud-login.menubar"
+    plist_path = Path.home() / "Library/LaunchAgents/com.nimbulo.menubar.plist"
+    label = "com.nimbulo.menubar"
+    # Before the rename the agent was "com.cloud-login.menubar"; remove it on install/uninstall so two
+    # menubar apps never run side by side.
+    legacy_plist = Path.home() / "Library/LaunchAgents/com.cloud-login.menubar.plist"
+
+    def _remove_legacy_agent() -> None:
+        if legacy_plist.exists():
+            subprocess.run(["launchctl", "unload", "-w", str(legacy_plist)], capture_output=True)
+            legacy_plist.unlink()
+            console.print(f"[green]removed old agent {legacy_plist}[/]")
 
     if action == "status":
         exists = plist_path.exists()
@@ -202,6 +211,7 @@ def autostart_cmd(
         return
 
     if action == "uninstall":
+        _remove_legacy_agent()
         subprocess.run(["launchctl", "unload", "-w", str(plist_path)], capture_output=True)
         _kill_running_menubar()
         if plist_path.exists():
@@ -215,8 +225,9 @@ def autostart_cmd(
         console.print(f"[red]unknown action: {action}[/]  (use install | uninstall | status)")
         raise typer.Exit(2)
 
-    prog_args = _resolve_cloud_login_program()
-    log_dir = Path.home() / "Library/Logs/cloud-login"
+    _remove_legacy_agent()
+    prog_args = _resolve_nimbulo_program()
+    log_dir = Path.home() / "Library/Logs/nimbulo"
     log_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(log_dir, 0o700)
     arg_xml = "\n        ".join(f"<string>{a}</string>" for a in prog_args)
@@ -338,20 +349,20 @@ def profiles_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vul
 def _resolve_token_arg(token: Optional[str], token_stdin: bool) -> Optional[str]:
     """Resolve an API token without requiring it on the command line.
 
-    Order: --token-stdin, CLOUD_LOGIN_TOKEN env var, deprecated --token.
+    Order: --token-stdin, NIMBULO_TOKEN env var, deprecated --token.
     A token passed as a command-line argument is visible to other local users
     via `ps`, so --token is kept only for backward compatibility and warns.
     """
     if token_stdin:
         value = sys.stdin.readline().strip()
         return value or None
-    env = os.environ.get("CLOUD_LOGIN_TOKEN", "").strip()
+    env = os.environ.get("NIMBULO_TOKEN", "").strip()
     if env:
         return env
     if token:
         console.print(
             "[yellow]warning:[/] --token exposes the secret in the process list. "
-            "Use --token-stdin, the CLOUD_LOGIN_TOKEN env var, or omit it to be prompted."
+            "Use --token-stdin, the NIMBULO_TOKEN env var, or omit it to be prompted."
         )
         return token
     return None
@@ -366,7 +377,7 @@ def login_cmd(
     subscription: Optional[str] = typer.Option(None, "--subscription", help="Azure subscription to activate after login"),
     tenant: Optional[str] = typer.Option(None, "--tenant", help="Azure tenant ID (for `az login --tenant`)"),
     region: Optional[str] = typer.Option(None, "--region", help="AWS region (with --method access-key) or OCI region"),
-    token: Optional[str] = typer.Option(None, "--token", help="DEPRECATED (visible in `ps`): use --token-stdin or CLOUD_LOGIN_TOKEN.", hidden=True),
+    token: Optional[str] = typer.Option(None, "--token", help="DEPRECATED (visible in `ps`): use --token-stdin or NIMBULO_TOKEN.", hidden=True),
     token_stdin: bool = typer.Option(False, "--token-stdin", help="read the API token (Vultr/DO) from stdin"),
     user: Optional[str] = typer.Option(None, "--user", help="OCI user OCID (oci -m api-key)"),
     tenancy: Optional[str] = typer.Option(None, "--tenancy", help="OCI tenancy OCID (oci -m api-key)"),
@@ -503,7 +514,7 @@ def set_compartment_cmd(
     compartment: str = typer.Argument(..., help="OCI compartment OCID to use for the active profile"),
     profile: Optional[str] = typer.Option(None, "--profile", help="OCI profile (default: the active one)"),
 ) -> None:
-    """Set the active OCI compartment (stored in cloud-login settings, not ~/.oci/config)."""
+    """Set the active OCI compartment (stored in nimbulo settings, not ~/.oci/config)."""
     p = providers.get("oci")
     result = p.set_secondary(compartment, profile=profile)  # type: ignore[call-arg]
     style = "green" if result.ok else "red"
@@ -559,7 +570,7 @@ def forget_cmd(provider: str = typer.Argument(..., help="aws|gcp|azure|oci|vultr
 @app.command("set-key")
 def set_key_cmd(
     provider: str = typer.Argument(..., help="vultr|digitalocean"),
-    token: Optional[str] = typer.Option(None, "--token", help="DEPRECATED (visible in `ps`): use --token-stdin or CLOUD_LOGIN_TOKEN.", hidden=True),
+    token: Optional[str] = typer.Option(None, "--token", help="DEPRECATED (visible in `ps`): use --token-stdin or NIMBULO_TOKEN.", hidden=True),
     token_stdin: bool = typer.Option(False, "--token-stdin", help="read the API token from stdin"),
 ) -> None:
     """Store/replace an API key for Vultr or Digital Ocean (alias for `login`)."""

@@ -5,10 +5,10 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from cloud_login import providers, settings
-from cloud_login.models import AuthState, ProviderStatus
-from cloud_login.providers.base import Provider
-from cloud_login.ui.cli import app
+from nimbulo import providers, settings
+from nimbulo.models import AuthState, ProviderStatus
+from nimbulo.providers.base import Provider
+from nimbulo.ui.cli import app
 
 KEYS = ["aws", "gcp", "azure", "oci", "vultr", "digitalocean"]
 runner = CliRunner()

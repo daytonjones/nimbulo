@@ -1,8 +1,8 @@
 """$OCI_CLI_CONFIG_FILE is honored, as the oci CLI honors it."""
 
-from cloud_login.models import AuthState
-from cloud_login.providers import oci_config
-from cloud_login.providers.oci import OCIProvider
+from nimbulo.models import AuthState
+from nimbulo.providers import oci_config
+from nimbulo.providers.oci import OCIProvider
 
 FP = "aa:bb"
 

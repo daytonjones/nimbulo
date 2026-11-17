@@ -1,3 +1,5 @@
+> **Historical document.** Written when this project was named `cloud-login`; it was later renamed **nimbulo** (module `nimbulo`, command `nimbulo`). Names below are as they were at the time.
+
 # cloud-login PyPI Packaging + OCI Provider Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

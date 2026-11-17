@@ -17,8 +17,8 @@ pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtCore import QThread  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from cloud_login import providers, settings  # noqa: E402
-from cloud_login.models import AuthState, ProviderStatus  # noqa: E402
+from nimbulo import providers, settings  # noqa: E402
+from nimbulo.models import AuthState, ProviderStatus  # noqa: E402
 
 KEYS = ["aws", "gcp", "azure", "oci", "vultr", "digitalocean"]
 
@@ -53,7 +53,7 @@ def cleanup():
 
 
 def make(qapp):
-    from cloud_login.ui.menubar import MenuBarApp
+    from nimbulo.ui.menubar import MenuBarApp
 
     a = MenuBarApp(qapp)
     _APPS.append(a)
@@ -114,7 +114,7 @@ def test_disabled_stale_state_does_not_affect_tray(qapp):
             a._states[k] = AuthState.AUTHENTICATED
     a._update_tray()
     assert providers.get("oci").label not in a.tray.toolTip()
-    from cloud_login.ui.menubar import _status_icon
+    from nimbulo.ui.menubar import _status_icon
 
     assert a.tray.icon().pixmap(22, 22).toImage() == _status_icon(AuthState.AUTHENTICATED).pixmap(22, 22).toImage()
 

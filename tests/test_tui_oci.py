@@ -7,11 +7,11 @@ import asyncio
 import pytest
 from textual.widgets import Checkbox, Input, Log, Select, Static, TabbedContent
 
-from cloud_login import settings
-from cloud_login.models import LoginResult
-from cloud_login.providers import oci_config
-from cloud_login.providers.oci import OCIProvider
-from cloud_login.ui import tui
+from nimbulo import settings
+from nimbulo.models import LoginResult
+from nimbulo.providers import oci_config
+from nimbulo.providers.oci import OCIProvider
+from nimbulo.ui import tui
 
 USER = "ocid1.user.oc1..aaaaaaaabbbbbbbbcccccccc"
 TENANCY = "ocid1.tenancy.oc1..aaaaaaaabbbbbbbbcccccccc"
@@ -209,7 +209,7 @@ def test_session_method_uses_existing_login(isolated):
 
 def test_markup_in_status_does_not_crash():
     async def go():
-        from cloud_login.models import AuthState, ProviderStatus
+        from nimbulo.models import AuthState, ProviderStatus
 
         app = tui.CloudLoginTUI()
         async with app.run_test(size=(120, 60)) as pilot:
@@ -282,8 +282,8 @@ def test_other_panes_layout_unchanged_at_80x24():
 
 # --- final review fix wave ----------------------------------------------------
 
-from cloud_login.models import AuthState, Identity, ProviderStatus  # noqa: E402
-from cloud_login.providers.oci import ConfirmationRequired  # noqa: E402
+from nimbulo.models import AuthState, Identity, ProviderStatus  # noqa: E402
+from nimbulo.providers.oci import ConfirmationRequired  # noqa: E402
 
 
 def log_text(app):

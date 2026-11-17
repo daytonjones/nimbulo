@@ -6,24 +6,24 @@ EXCLUDED = {"docs", ".git", ".superpowers", ".venv", "dist", ".pytest_cache", ".
 
 
 def test_imports():
-    import cloud_login
-    from cloud_login.providers import all_providers
+    import nimbulo
+    from nimbulo.providers import all_providers
 
-    assert cloud_login.main
+    assert nimbulo.main
     assert all_providers()
 
 
 def test_registry_has_six_providers():
-    from cloud_login.providers import all_providers
+    from nimbulo.providers import all_providers
 
     assert [p.key for p in all_providers()] == ["aws", "gcp", "azure", "oci", "vultr", "digitalocean"]
 
 
 def test_assets_exist():
-    from cloud_login.providers import all_providers
-    from cloud_login.ui.gui import ASSETS_DIR
+    from nimbulo.providers import all_providers
+    from nimbulo.ui.gui import ASSETS_DIR
 
-    assert ASSETS_DIR == ROOT / "src" / "cloud_login" / "assets"
+    assert ASSETS_DIR == ROOT / "src" / "nimbulo" / "assets"
     for p in all_providers():
         assert (ASSETS_DIR / f"{p.key}.svg").is_file(), p.key
 

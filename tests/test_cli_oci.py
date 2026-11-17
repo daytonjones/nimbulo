@@ -3,9 +3,9 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from cloud_login import settings
-from cloud_login.providers import oci, oci_config
-from cloud_login.ui.cli import app
+from nimbulo import settings
+from nimbulo.providers import oci, oci_config
+from nimbulo.ui.cli import app
 
 runner = CliRunner()
 
@@ -144,8 +144,8 @@ def test_cli_set_compartment(env, fake_run):
 
 import time  # noqa: E402
 
-from cloud_login.models import AuthState, Identity, ProviderStatus  # noqa: E402
-from cloud_login.providers.oci import OCIProvider  # noqa: E402
+from nimbulo.models import AuthState, Identity, ProviderStatus  # noqa: E402
+from nimbulo.providers.oci import OCIProvider  # noqa: E402
 
 API_CFG = f"[API]\nuser={U}\ntenancy={T}\nfingerprint=aa:bb\nkey_file=/k.pem\nregion=eu-frankfurt-1\n"
 AUTH_API = ["oci", "session", "authenticate", "--profile-name", "API", "--region", "eu-frankfurt-1"]

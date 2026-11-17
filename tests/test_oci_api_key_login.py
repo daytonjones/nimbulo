@@ -1,8 +1,8 @@
 import pytest
 
-from cloud_login import settings
-from cloud_login.providers import oci, oci_config
-from cloud_login.providers.oci import OCIProvider
+from nimbulo import settings
+from nimbulo.providers import oci, oci_config
+from nimbulo.providers.oci import OCIProvider
 
 UOCID = "ocid1.user.oc1..aaaa"
 TOCID = "ocid1.tenancy.oc1..bbbb"

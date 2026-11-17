@@ -14,8 +14,8 @@ pytest.importorskip("PySide6.QtWidgets")
 
 
 def test_menubar_lists_oci_provider():
-    menubar = pytest.importorskip("cloud_login.ui.menubar")
-    from cloud_login import providers
+    menubar = pytest.importorskip("nimbulo.ui.menubar")
+    from nimbulo import providers
 
     keys = [p.key for p in providers.all_providers()]
     assert "oci" in keys

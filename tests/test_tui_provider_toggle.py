@@ -7,8 +7,8 @@ import asyncio
 import pytest
 from textual.widgets import Checkbox, TabbedContent
 
-from cloud_login import providers, settings
-from cloud_login.ui import tui
+from nimbulo import providers, settings
+from nimbulo.ui import tui
 
 ORIG_REFRESH = tui.ProviderPane.refresh_status
 KEYS = ["aws", "gcp", "azure", "oci", "vultr", "digitalocean"]
@@ -209,12 +209,12 @@ def test_removing_pane_with_inflight_worker_is_safe(monkeypatch):
     def slow_status(self):
         started.set()
         release.wait(5)
-        from cloud_login.models import AuthState, ProviderStatus
+        from nimbulo.models import AuthState, ProviderStatus
 
         return ProviderStatus(state=AuthState.UNAUTHENTICATED)
 
     monkeypatch.setattr(tui.ProviderPane, "refresh_status", ORIG_REFRESH)
-    from cloud_login.providers.gcp import GCPProvider
+    from nimbulo.providers.gcp import GCPProvider
 
     monkeypatch.setattr(GCPProvider, "status", slow_status)
 

@@ -178,7 +178,7 @@ class MenuBarApp(QObject):
         self._states: dict[str, AuthState] = {}
 
         self.tray = QSystemTrayIcon(self)
-        self.tray.setToolTip("cloud-login")
+        self.tray.setToolTip("nimbulo")
         self.tray.setIcon(_status_icon(AuthState.UNKNOWN))
 
         # One controller per enabled provider; each owns its worker thread.
@@ -203,7 +203,7 @@ class MenuBarApp(QObject):
     # --- menu construction ------------------------------------------------
 
     def _build_menu(self) -> None:
-        header = QAction("Cloud Login", self.menu)
+        header = QAction("Nimbulo", self.menu)
         header.setEnabled(False)
         self.menu.addAction(header)
         self.menu.addSeparator()
@@ -228,12 +228,12 @@ class MenuBarApp(QObject):
         refresh_act.triggered.connect(self.refresh_all)
         self.menu.addAction(refresh_act)
 
-        open_act = QAction("Open Cloud Login…", self.menu)
+        open_act = QAction("Open Nimbulo…", self.menu)
         open_act.triggered.connect(self._open_gui)
         self.menu.addAction(open_act)
 
         self.menu.addSeparator()
-        quit_act = QAction("Quit cloud-login", self.menu)
+        quit_act = QAction("Quit nimbulo", self.menu)
         quit_act.setShortcut("Ctrl+Q")
         quit_act.triggered.connect(self.app.quit)
         self.menu.addAction(quit_act)
@@ -325,7 +325,7 @@ class MenuBarApp(QObject):
         agg = _aggregate([self._states[k] for k in keys])
         self.tray.setIcon(_status_icon(agg))
         tip_lines = [f"{providers.get(k).label}: {self._states[k].value}" for k in keys]
-        self.tray.setToolTip("cloud-login\n" + "\n".join(tip_lines))
+        self.tray.setToolTip("nimbulo\n" + "\n".join(tip_lines))
 
     # --- refresh ----------------------------------------------------------
 

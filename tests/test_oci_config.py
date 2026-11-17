@@ -4,7 +4,7 @@ import stat
 
 import pytest
 
-from cloud_login.providers import oci_config
+from nimbulo.providers import oci_config
 
 UOCID = "ocid1.user.oc1..aaaa"
 TOCID = "ocid1.tenancy.oc1..bbbb"

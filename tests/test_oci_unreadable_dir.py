@@ -4,10 +4,10 @@ import os
 
 import pytest
 
-from cloud_login import settings
-from cloud_login.models import AuthState
-from cloud_login.providers import oci_config
-from cloud_login.providers.oci import OCIProvider
+from nimbulo import settings
+from nimbulo.models import AuthState
+from nimbulo.providers import oci_config
+from nimbulo.providers.oci import OCIProvider
 
 pytestmark = pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 

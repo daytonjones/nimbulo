@@ -15,12 +15,12 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QThread  # noqa: E402
 from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLineEdit  # noqa: E402
 
-from cloud_login import settings  # noqa: E402
-from cloud_login.models import AuthState, Identity, LoginResult, ProviderStatus  # noqa: E402
-from cloud_login.providers import oci_config  # noqa: E402
-from cloud_login.providers.aws import AWSProvider  # noqa: E402
-from cloud_login.providers.oci import OCIProvider  # noqa: E402
-from cloud_login.ui import gui  # noqa: E402
+from nimbulo import settings  # noqa: E402
+from nimbulo.models import AuthState, Identity, LoginResult, ProviderStatus  # noqa: E402
+from nimbulo.providers import oci_config  # noqa: E402
+from nimbulo.providers.aws import AWSProvider  # noqa: E402
+from nimbulo.providers.oci import OCIProvider  # noqa: E402
+from nimbulo.ui import gui  # noqa: E402
 
 USER = "ocid1.user.oc1..aaaaaaaabbbbbbbbcccccccc"
 TENANCY = "ocid1.tenancy.oc1..aaaaaaaabbbbbbbbcccccccc"
@@ -258,7 +258,7 @@ def themed(qapp, monkeypatch):
     """Apply the real qt-material theme + OVERLAY_QSS exactly as run() does, then undo."""
     from qt_material import apply_stylesheet
 
-    from cloud_login import providers
+    from nimbulo import providers
 
     for cls in {type(p) for p in providers.all_providers()}:
         monkeypatch.setattr(cls, "status", lambda self, profile=None: ProviderStatus(self.key, AuthState.UNKNOWN))
@@ -270,7 +270,7 @@ def themed(qapp, monkeypatch):
 
 
 def test_gui_oci_tab_fits_default_window(themed):
-    from cloud_login import providers
+    from nimbulo import providers
 
     tabs = {}
     for p in providers.all_providers():
@@ -292,7 +292,7 @@ def test_gui_oci_tab_fits_default_window(themed):
 
 # --- final review fix wave ----------------------------------------------------
 
-from cloud_login.providers.oci import ConfirmationRequired  # noqa: E402
+from nimbulo.providers.oci import ConfirmationRequired  # noqa: E402
 
 Yes = gui.QMessageBox.StandardButton.Yes
 No = gui.QMessageBox.StandardButton.No

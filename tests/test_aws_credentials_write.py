@@ -5,8 +5,8 @@ import stat
 
 import pytest
 
-from cloud_login.providers import aws
-from cloud_login.providers.aws import AWSProvider
+from nimbulo.providers import aws
+from nimbulo.providers.aws import AWSProvider
 
 
 @pytest.fixture

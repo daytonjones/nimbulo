@@ -2,10 +2,10 @@
 
 import sys
 
-from cloud_login.models import AuthState
-from cloud_login.providers import oci_config
-from cloud_login.providers.base import Provider
-from cloud_login.providers.oci import OCIProvider
+from nimbulo.models import AuthState
+from nimbulo.providers import oci_config
+from nimbulo.providers.base import Provider
+from nimbulo.providers.oci import OCIProvider
 
 ENC_PKCS8 = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFH\n-----END ENCRYPTED PRIVATE KEY-----\n"
 ENC_LEGACY = (

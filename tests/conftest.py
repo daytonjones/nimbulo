@@ -32,11 +32,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import keyring
 import pytest
 
-from cloud_login import settings
-from cloud_login.providers import aws, digitalocean, gcp, oci, oci_config, vultr
-from cloud_login.providers.base import Provider
+from nimbulo import settings
+from nimbulo.providers import aws, digitalocean, gcp, oci, oci_config, vultr
+from nimbulo.providers.base import Provider
 
 # --- global isolation guard -------------------------------------------------------
 # Every test runs against a throwaway HOME. Module-level paths (computed at import
@@ -92,8 +93,15 @@ def _isolate_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(gcp, "GCLOUD_DIR", home / ".config" / "gcloud")
     monkeypatch.setattr(vultr, "VULTR_CLI_CONFIG", home / ".vultr-cli.yaml")
     monkeypatch.setattr(digitalocean, "DOCTL_CONFIG", home / ".config" / "doctl" / "config.yaml")
-    monkeypatch.setattr(settings, "CONFIG_DIR", home / ".config" / "cloud-login")
-    monkeypatch.setattr(settings, "SETTINGS_FILE", home / ".config" / "cloud-login" / "settings.json")
+    monkeypatch.setattr(settings, "CONFIG_DIR", home / ".config" / "nimbulo")
+    monkeypatch.setattr(settings, "SETTINGS_FILE", home / ".config" / "nimbulo" / "settings.json")
+    monkeypatch.setattr(settings, "LEGACY_SETTINGS_FILE", home / ".config" / "cloud-login" / "settings.json")
+
+    # never the real Keychain: an in-memory store stands in for keyring
+    store: dict[tuple[str, str], str] = {}
+    monkeypatch.setattr(keyring, "get_password", lambda svc, name: store.get((svc, name)))
+    monkeypatch.setattr(keyring, "set_password", lambda svc, name, pw: store.__setitem__((svc, name), pw))
+    monkeypatch.setattr(keyring, "delete_password", lambda svc, name: store.pop((svc, name), None))
 
     real_run, real_popen = subprocess.run, subprocess.Popen
 

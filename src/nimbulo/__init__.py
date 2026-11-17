@@ -1,4 +1,4 @@
-"""cloud-login: manage logins across AWS, GCP, Vultr, and Digital Ocean."""
+"""nimbulo: manage logins across AWS, GCP, Vultr, and Digital Ocean."""
 from __future__ import annotations
 
 

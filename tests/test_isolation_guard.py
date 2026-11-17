@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from conftest import _REAL_HOME, RealOCIBlocked
 
-from cloud_login import settings
-from cloud_login.providers import oci, oci_config
+from nimbulo import settings
+from nimbulo.providers import oci, oci_config
 
 
 def test_home_and_paths_are_redirected(_isolate_home):

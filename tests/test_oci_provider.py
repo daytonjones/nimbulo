@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from cloud_login import settings
-from cloud_login.models import AuthState
-from cloud_login.providers import oci_config
-from cloud_login.providers.oci import OCIProvider
+from nimbulo import settings
+from nimbulo.models import AuthState
+from nimbulo.providers import oci_config
+from nimbulo.providers.oci import OCIProvider
 
 UOCID = "ocid1.user.oc1..aaaa"
 TOCID = "ocid1.tenancy.oc1..bbbb"
@@ -190,7 +190,7 @@ def test_logout_api_key_profile_not_supported_message(fake_run, env):
 
 # --- final review fix wave ----------------------------------------------------
 
-from cloud_login.providers import oci  # noqa: E402
+from nimbulo.providers import oci  # noqa: E402
 
 FULL_DEFAULT = f"[DEFAULT]\nuser={UOCID}\ntenancy={TOCID}\nfingerprint=aa:bb\nkey_file=/k.pem\nregion=us-ashburn-1\n"
 SERVICE_ERROR = """WARNING: Permissions on /x/k.pem are too open.
@@ -252,9 +252,9 @@ def test_unreadable_config_is_error_status(fake_run, env):
 def test_malformed_oci_config_does_not_break_cli_status(fake_run, env, monkeypatch):
     from typer.testing import CliRunner
 
-    from cloud_login import providers
-    from cloud_login.models import ProviderStatus
-    from cloud_login.ui.cli import app
+    from nimbulo import providers
+    from nimbulo.models import ProviderStatus
+    from nimbulo.ui.cli import app
 
     (env / "config").write_text("[A]\n[A]\n")
 

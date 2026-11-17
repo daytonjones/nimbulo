@@ -4,7 +4,7 @@ import json
 import os
 import stat
 
-from cloud_login import settings
+from nimbulo import settings
 
 
 def _mode(p):
@@ -14,7 +14,7 @@ def _mode(p):
 def test_symlinked_settings_file_is_written_through(tmp_path, monkeypatch):
     dotfiles = tmp_path / "dotfiles"
     dotfiles.mkdir()
-    real = dotfiles / "cloud-login-settings.json"
+    real = dotfiles / "nimbulo-settings.json"
     real.write_text(json.dumps({"keep": 1}))
     real.chmod(0o644)
     cfg = tmp_path / "cfg"
@@ -29,7 +29,7 @@ def test_symlinked_settings_file_is_written_through(tmp_path, monkeypatch):
     assert link.is_symlink() and os.readlink(link) == str(real)
     assert json.loads(real.read_text()) == {"keep": 1, "providers": {"disabled": ["vultr"]}}
     assert _mode(real) == 0o644  # target's mode preserved
-    assert sorted(p.name for p in dotfiles.iterdir()) == ["cloud-login-settings.json"]  # no temp left
+    assert sorted(p.name for p in dotfiles.iterdir()) == ["nimbulo-settings.json"]  # no temp left
     assert sorted(p.name for p in cfg.iterdir()) == ["settings.json"]
 
 
