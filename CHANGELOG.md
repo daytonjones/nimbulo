@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Linux support for `nimbulo autostart` (XDG autostart entry).
+
 ## [0.3.0] - 2026-11-16
 
 ### Added

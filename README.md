@@ -12,7 +12,7 @@ The same provider layer drives four interchangeable UIs:
 | ---------------------- | -------- | ------------------------------------------------------------ |
 | `nimbulo`          | GUI      | PySide6 desktop window with tabs per provider (default).     |
 | `nimbulo tui`      | TUI      | Textual terminal UI with the same tabs.                      |
-| `nimbulo menubar`  | menubar  | macOS resident tray icon with aggregate health + per-provider menu. |
+| `nimbulo menubar`  | menubar  | Resident tray icon (macOS menu bar / Linux system tray) with aggregate health + per-provider menu. |
 | `nimbulo status`   | CLI      | Status table for all providers (or one with `-p aws`).       |
 
 Every action in the GUI/TUI/menubar is also a CLI subcommand. Run `nimbulo --help` to see all.
@@ -129,15 +129,17 @@ Ways to change it (all write the same setting):
 
 At least one provider must stay enabled; if the file disables all of them, all are shown. Disabling only hides a provider: nothing is deleted, no credentials or CLI config are touched, and explicit commands such as `nimbulo login oci` still work for a disabled provider.
 
-## Auto-start the menu bar at macOS login
+## Auto-start the menu bar at login (macOS and Linux)
 
 ```bash
-nimbulo autostart install      # writes ~/Library/LaunchAgents/com.nimbulo.menubar.plist and launchctl loads it
-nimbulo autostart status       # check whether it's installed and loaded
-nimbulo autostart uninstall    # remove the LaunchAgent
+nimbulo autostart install      # register the menu bar to start at login (and start it now)
+nimbulo autostart status       # check whether it's installed (and loaded / running)
+nimbulo autostart uninstall    # remove it and stop the running menu bar
 ```
 
-The launchd plist runs `nimbulo menubar`. After install, it'll start automatically on next login; logs go to `~/Library/Logs/nimbulo/menubar.{log,err}` (a private, owner-only directory). Re-run `nimbulo autostart install` to move an existing install off the old `/tmp` log paths.
+**macOS:** writes `~/Library/LaunchAgents/com.nimbulo.menubar.plist` and `launchctl load`s it. The agent runs `nimbulo menubar`; it starts automatically on next login, and logs go to `~/Library/Logs/nimbulo/menubar.{log,err}` (a private, owner-only directory). Re-run `nimbulo autostart install` to move an existing install off the old `/tmp` log paths.
+
+**Linux:** writes an XDG autostart entry, `${XDG_CONFIG_HOME:-~/.config}/autostart/nimbulo-menubar.desktop`, honored by GNOME, KDE, XFCE and most other desktops (no systemd needed). Install also starts the menu bar immediately when a graphical session is detected (`DISPLAY` or `WAYLAND_DISPLAY`); otherwise it starts at next login. A desktop entry cannot redirect output, so menu bar output goes to the desktop session journal (`journalctl --user`). On GNOME the tray icon needs the AppIndicator/StatusNotifier shell extension. `status` reports the entry and whether a `nimbulo menubar` process is running (via `pgrep`). Linux support is not yet tested on real desktops.
 
 ## Where things live
 
@@ -151,6 +153,7 @@ The launchd plist runs `nimbulo menubar`. After install, it'll start automatical
 | `~/.vultr-cli.yaml`                        | Vultr CLI config (optional)                      |
 | `~/.config/doctl/config.yaml`              | doctl config (optional)                          |
 | macOS Keychain, service `nimbulo`      | Stored Vultr/DO API keys                         |
+| `~/Library/LaunchAgents/com.nimbulo.menubar.plist` (macOS), `${XDG_CONFIG_HOME:-~/.config}/autostart/nimbulo-menubar.desktop` (Linux) | Menu bar autostart entry (`nimbulo autostart`) |
 | `~/.config/nimbulo/settings.json`      | App preferences (window geometry, last-selected profile per provider, disabled providers, etc.) |
 
 Nothing is read or written outside these. The app never bypasses the underlying CLIs for credential material.

@@ -167,24 +167,34 @@ def _kill_running_menubar() -> None:
 
     Covers both the `nimbulo menubar` script invocation and the
     `python -m nimbulo menubar` fallback. Run before re-loading the
-    LaunchAgent so we don't end up with stacked instances.
+    LaunchAgent / relaunching so we don't end up with stacked instances.
+    Works on macOS and Linux (pkill -f); a missing pkill is tolerated.
     """
     import subprocess
 
     for pattern in ("nimbulo menubar", "nimbulo.*menubar"):
-        subprocess.run(["pkill", "-f", pattern], capture_output=True)
+        try:
+            subprocess.run(["pkill", "-f", pattern], capture_output=True)
+        except OSError:
+            pass
 
 
 @app.command("autostart")
 def autostart_cmd(
     action: str = typer.Argument("install", help="install | uninstall | status"),
 ) -> None:
-    """Manage a launchd LaunchAgent so the menu-bar app starts at macOS login."""
-    import subprocess
-
-    if sys.platform != "darwin":
-        console.print("[red]autostart is macOS-only[/]")
+    """Start the menu-bar app at login (macOS: launchd LaunchAgent; Linux: XDG autostart entry)."""
+    if sys.platform == "darwin":
+        _autostart_macos(action)
+    elif sys.platform.startswith("linux"):
+        _autostart_linux(action)
+    else:
+        console.print("[red]autostart supports macOS and Linux only[/]")
         raise typer.Exit(2)
+
+
+def _autostart_macos(action: str) -> None:
+    import subprocess
 
     plist_path = Path.home() / "Library/LaunchAgents/com.nimbulo.menubar.plist"
     label = "com.nimbulo.menubar"
@@ -279,6 +289,119 @@ def autostart_cmd(
     else:
         console.print(f"[yellow]plist installed but launchctl load failed:[/] {rc.stderr.strip()}")
         console.print(f"[yellow]load manually with:[/] launchctl load -w {plist_path}")
+
+
+_DESKTOP_EXEC_SPECIAL = set(" \t\n\"'\\><~|&;$*?#()`")
+
+
+def _desktop_exec_quote(arg: str) -> str:
+    """Quote one argv element for a .desktop Exec= line (Desktop Entry spec).
+
+    Args containing reserved characters go in double quotes with `"`, `` ` ``, `$` and `\\` escaped by
+    a backslash; because the value is itself a desktop string, a literal backslash is doubled again.
+    A literal `%` must be written `%%` (field-code introducer).
+    """
+    arg = arg.replace("%", "%%")
+    if not any(c in _DESKTOP_EXEC_SPECIAL for c in arg):
+        return arg
+    out = []
+    for c in arg:
+        if c == "\\":
+            out.append("\\\\\\\\")
+        elif c in '"`$':
+            out.append("\\" + c)
+        else:
+            out.append(c)
+    return '"' + "".join(out) + '"'
+
+
+def _linux_autostart_path() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "autostart" / "nimbulo-menubar.desktop"
+
+
+def _menubar_running() -> bool:
+    """True if a `nimbulo menubar` process exists (pgrep -f); False if none or pgrep is unavailable."""
+    import subprocess
+
+    try:
+        rc = subprocess.run(["pgrep", "-f", "nimbulo.*menubar"], capture_output=True)
+    except OSError:
+        return False
+    return rc.returncode == 0
+
+
+def _autostart_linux(action: str) -> None:
+    """XDG autostart entry (GNOME/KDE/XFCE/...). Output goes to the desktop session journal, not a file."""
+    import subprocess
+
+    path = _linux_autostart_path()
+
+    if action == "status":
+        exists = path.exists()
+        console.print(f"entry: {'[green]installed[/]' if exists else '[yellow]not installed[/]'}  ({path})")
+        if _menubar_running():
+            console.print("[green]menubar: running[/]")
+        else:
+            console.print("[yellow]menubar: not running[/]")
+        return
+
+    if action == "uninstall":
+        _kill_running_menubar()
+        if path.exists():
+            path.unlink()
+            console.print(f"[green]removed {path}[/]")
+        else:
+            console.print("[yellow]already uninstalled[/]")
+        return
+
+    if action != "install":
+        console.print(f"[red]unknown action: {action}[/]  (use install | uninstall | status)")
+        raise typer.Exit(2)
+
+    prog_args = _resolve_nimbulo_program()
+    exec_line = " ".join(_desktop_exec_quote(a) for a in prog_args)
+    entry = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=nimbulo menu bar\n"
+        "Comment=Cloud login status in the system tray\n"
+        f"Exec={exec_line}\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(path.with_name(f".{path.name}.{os.getpid()}.tmp"))
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(fd, "w") as f:
+            f.write(entry)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    console.print(f"[green]wrote {path}[/]")
+    console.print(f"[dim]program: {' '.join(prog_args)}[/]")
+    console.print("[dim]output goes to the desktop session journal (journalctl --user), not a log file[/]")
+    console.print("[dim]GNOME needs the AppIndicator/StatusNotifier extension for the tray icon to show[/]")
+
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        _kill_running_menubar()  # reinstall must not stack instances
+        try:
+            subprocess.Popen(
+                prog_args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            console.print("[green]menubar started; will also start at next login[/]")
+        except OSError as e:
+            console.print(f"[yellow]could not start menubar now ({e}); it will start at next login[/]")
+    else:
+        console.print("[dim]no graphical session detected; will start at next login[/]")
 
 
 @app.command("status")
