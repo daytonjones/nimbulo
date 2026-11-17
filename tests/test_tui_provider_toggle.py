@@ -57,7 +57,7 @@ async def save(pilot):
 
 def test_modal_opens_with_six_checkboxes_and_fits():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             screen = await open_modal(app, pilot)
             boxes = screen.query(Checkbox)
@@ -73,7 +73,7 @@ def test_modal_opens_with_six_checkboxes_and_fits():
 
 def test_disable_removes_tab_and_persists():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             screen = await open_modal(app, pilot)
             await set_box(pilot, screen, "gcp", False)
@@ -88,7 +88,7 @@ def test_disable_removes_tab_and_persists():
 def test_reenable_restores_canonical_order():
     async def go():
         settings.set("providers.disabled", ["gcp", "oci"])
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             assert tab_ids(app) == ["aws", "azure", "vultr", "digitalocean"]
             screen = await open_modal(app, pilot)
@@ -105,7 +105,7 @@ def test_reenable_restores_canonical_order():
 
 def test_disabling_active_tab_activates_first_remaining():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             app.query_one(TabbedContent).active = "azure"
             await pilot.pause()
@@ -119,7 +119,7 @@ def test_disabling_active_tab_activates_first_remaining():
 
 def test_active_tab_kept_when_other_changes():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             app.query_one(TabbedContent).active = "azure"
             await pilot.pause()
@@ -134,7 +134,7 @@ def test_active_tab_kept_when_other_changes():
 def test_last_enabled_cannot_be_unchecked():
     async def go():
         settings.set("providers.disabled", ["aws", "gcp", "azure", "oci", "vultr"])
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             screen = await open_modal(app, pilot)
             last = screen.query_one("#prov-digitalocean", Checkbox)
@@ -147,7 +147,7 @@ def test_last_enabled_cannot_be_unchecked():
 
 def test_cancel_and_escape_change_nothing():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             screen = await open_modal(app, pilot)
             await set_box(pilot, screen, "gcp", False)
@@ -167,7 +167,7 @@ def test_cancel_and_escape_change_nothing():
 def test_save_failure_notifies_and_keeps_state(monkeypatch):
     async def go():
         notes = []
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((msg, kw)))
         monkeypatch.setattr(providers, "set_enabled", lambda k, e: (False, "boom"))
         async with app.run_test(size=(80, 24)) as pilot:
@@ -183,7 +183,7 @@ def test_save_failure_notifies_and_keeps_state(monkeypatch):
 def test_all_disabled_fallback_composes():
     async def go():
         settings.set("providers.disabled", KEYS)
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)):
             assert tab_ids(app) == KEYS
 
@@ -193,7 +193,7 @@ def test_all_disabled_fallback_composes():
 def test_all_disabled_file_modal_boxes_all_checked():
     async def go():
         settings.set("providers.disabled", KEYS)
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             screen = await open_modal(app, pilot)
             assert all(b.value for b in screen.query(Checkbox))
@@ -219,7 +219,7 @@ def test_removing_pane_with_inflight_worker_is_safe(monkeypatch):
     monkeypatch.setattr(GCPProvider, "status", slow_status)
 
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             assert started.wait(5)

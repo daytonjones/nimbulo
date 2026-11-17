@@ -357,7 +357,7 @@ class ProvidersScreen(ModalScreen):
         self.dismiss(None)
 
 
-class CloudLoginTUI(App):
+class NimbuloTUI(App):
     CSS = """
     Screen { background: $surface; }
     .status { padding: 1 1; height: auto; }
@@ -371,7 +371,7 @@ class CloudLoginTUI(App):
     #oci-form Input { height: 1; border: none; padding: 0 1; width: 1fr; margin-right: 1; }
     #oci-form Checkbox { height: 1; border: none; padding: 0; width: auto; }
     #oci-msg { height: auto; width: 1fr; padding: 0 1; }
-    CloudLoginTUI.-oci-compact #log { height: 6; }
+    NimbuloTUI.-oci-compact #log { height: 6; }
     #log { height: 16; border: solid $primary; }
     """
     BINDINGS = [
@@ -630,5 +630,5 @@ class CloudLoginTUI(App):
 
 
 def run() -> int:
-    CloudLoginTUI().run()
+    NimbuloTUI().run()
     return 0
