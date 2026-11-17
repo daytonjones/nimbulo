@@ -133,7 +133,7 @@ def tui_cmd() -> None:
 
 @app.command("menubar")
 def menubar_cmd() -> None:
-    """Launch the macOS menu-bar status app (resident process)."""
+    """Launch the menu-bar / system-tray status app (resident process)."""
     from .menubar import run as run_menubar
 
     raise typer.Exit(run_menubar())
