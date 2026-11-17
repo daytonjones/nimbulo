@@ -157,7 +157,7 @@ def make_tui() -> None:
     from nimbulo.ui import tui
 
     async def go() -> str:
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(110, 26)) as pilot:
             for _ in range(40):
                 await pilot.pause()

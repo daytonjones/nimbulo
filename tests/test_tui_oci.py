@@ -64,7 +64,7 @@ async def select_method(app, pilot, method):
 
 def test_oci_form_hidden_for_other_methods():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await pilot.pause()
             assert form(app).display is False  # initial method is session
@@ -80,7 +80,7 @@ def test_oci_form_hidden_for_other_methods():
 
 def test_oci_form_visible_for_api_key():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await select_method(app, pilot, "api-key")
             for wid in FORM_IDS:
@@ -96,7 +96,7 @@ def test_oci_form_visible_for_api_key():
 
 def test_invalid_ocid_shows_message_without_calling_login(isolated):
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await select_method(app, pilot, "api-key")
             app.query_one("#oci-user", Input).value = "not-an-ocid"
@@ -142,7 +142,7 @@ def test_invalid_ocid_shows_message_without_calling_login(isolated):
 
 def test_submit_calls_login_with_kwargs(isolated):
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await select_method(app, pilot, "api-key")
             app.query_one("#oci-profile", Input).value = "work"
@@ -178,7 +178,7 @@ def test_submit_calls_login_with_kwargs(isolated):
 
 def test_enter_in_last_field_submits(isolated):
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await select_method(app, pilot, "api-key")
             app.query_one("#oci-user", Input).value = USER
@@ -195,7 +195,7 @@ def test_enter_in_last_field_submits(isolated):
 
 def test_session_method_uses_existing_login(isolated):
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             app.query_one(TabbedContent).active = "oci"
             await pilot.pause(0.3)
@@ -211,7 +211,7 @@ def test_markup_in_status_does_not_crash():
     async def go():
         from nimbulo.models import AuthState, ProviderStatus
 
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             pane = app._panes["oci"]
             pane.render_status(ProviderStatus("oci", AuthState.ERROR, message="bad [/oops] [x", active_profile="a[b"))
@@ -222,7 +222,7 @@ def test_markup_in_status_does_not_crash():
 
 def test_other_providers_panes_unchanged():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await pilot.pause()
             for key in ("aws", "vultr", "digitalocean"):
@@ -238,7 +238,7 @@ def test_other_providers_panes_unchanged():
 
 def test_form_usable_at_80x24():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             await select_method(app, pilot, "api-key")
             await pilot.pause(0.3)
@@ -268,7 +268,7 @@ def test_form_usable_at_80x24():
 
 def test_other_panes_layout_unchanged_at_80x24():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             for key, pane in app._panes.items():
@@ -308,7 +308,7 @@ async def press_and_wait(app, pilot, wid):
 
 def test_session_login_does_not_pass_form_region(isolated):
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await pick_profile(app, pilot, "PROD")
             assert app.query_one("#oci-region", Input).value == "eu-frankfurt-1"  # DEFAULT's region
@@ -332,7 +332,7 @@ def test_session_login_api_key_profile_needs_second_press(monkeypatch):
     monkeypatch.setattr(OCIProvider, "login", fake_login)
 
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await pick_profile(app, pilot, "PROD")
             await press_and_wait(app, pilot, "#login-oci")
@@ -361,7 +361,7 @@ def test_pending_confirmation_cleared_by_method_change(monkeypatch):
     monkeypatch.setattr(OCIProvider, "login", fake_login)
 
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await pick_profile(app, pilot, "PROD")
             await press_and_wait(app, pilot, "#login-oci")
@@ -385,7 +385,7 @@ def test_logout_warns_then_confirms(monkeypatch):
     monkeypatch.setattr(OCIProvider, "logout", fake_logout)
 
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await pick_profile(app, pilot, "PROD")
             await press_and_wait(app, pilot, "#logout-oci")
@@ -399,7 +399,7 @@ def test_logout_warns_then_confirms(monkeypatch):
 
 def test_status_labels_tenancy_for_oci():
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             pane = app._panes["oci"]
             pane.render_status(
@@ -418,7 +418,7 @@ def test_status_labels_tenancy_for_oci():
 
 def test_region_case_is_normalised(isolated):
     async def go():
-        app = tui.CloudLoginTUI()
+        app = tui.NimbuloTUI()
         async with app.run_test(size=(120, 60)) as pilot:
             await select_method(app, pilot, "api-key")
             app.query_one("#oci-user", Input).value = USER
