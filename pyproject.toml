@@ -84,3 +84,5 @@ select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A hung test dumps every thread's stack after 120s instead of stalling silently.
+faulthandler_timeout = 120

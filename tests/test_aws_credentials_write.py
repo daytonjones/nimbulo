@@ -31,7 +31,7 @@ def test_access_key_files_are_private_and_correct(aws_dir):
     assert mode(aws_dir / "config") == 0o600
     assert "SECRET" in (aws_dir / "credentials").read_text()
     assert "region = us-west-2" in (aws_dir / "config").read_text()
-    assert [f.name for f in aws_dir.iterdir()] == ["config", "credentials"]  # no temp leftovers
+    assert sorted(f.name for f in aws_dir.iterdir()) == ["config", "credentials"]  # no temp leftovers
 
 
 def test_secret_never_world_readable_during_write(aws_dir, monkeypatch):

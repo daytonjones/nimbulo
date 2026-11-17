@@ -47,6 +47,33 @@ from nimbulo.providers.base import Provider
 _REAL_HOME = Path(os.path.expanduser("~"))
 
 
+@pytest.fixture(autouse=True)
+def _plain_wide_terminal(monkeypatch):
+    """Make rich/typer output identical on a laptop and in CI.
+
+    typer reads GITHUB_ACTIONS / FORCE_COLOR / TERMINAL_WIDTH once at import time and then forces
+    ANSI colour and an 80-column box, which splits option names across lines. Pin plain, wide output.
+    """
+    for var in ("FORCE_COLOR", "PY_COLORS", "GITHUB_ACTIONS", "TERMINAL_WIDTH"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setenv("COLUMNS", "200")
+    try:
+        from typer import rich_utils
+
+        monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", False)
+        monkeypatch.setattr(rich_utils, "MAX_WIDTH", 200)
+    except ImportError:  # pragma: no cover
+        pass
+    # cli.console is built at import time (so it captured FORCE_COLOR / GITHUB_ACTIONS); rebuild it.
+    from rich.console import Console
+
+    from nimbulo.ui import cli
+
+    monkeypatch.setattr(cli, "console", Console(force_terminal=False, no_color=True, width=200))
+
+
 def _snapshot(root: Path) -> dict[str, tuple[int, int]]:
     out: dict[str, tuple[int, int]] = {}
     if not root.is_dir():
