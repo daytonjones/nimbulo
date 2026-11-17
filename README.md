@@ -17,6 +17,24 @@ The same provider layer drives four interchangeable UIs:
 
 Every action in the GUI/TUI/menubar is also a CLI subcommand. Run `nimbulo --help` to see all.
 
+## Screenshots
+
+**GUI** (PySide6): per-provider tabs with live status, profile/method pickers and an activity log.
+
+![Nimbulo GUI showing an authenticated AWS session](https://raw.githubusercontent.com/daytonjones/nimbulo/main/docs/images/gui.png)
+
+![Nimbulo GUI on the Google Cloud tab with the project picker](https://raw.githubusercontent.com/daytonjones/nimbulo/main/docs/images/gui-gcp.png)
+
+**TUI** (`nimbulo tui`):
+
+![Nimbulo terminal UI showing an authenticated AWS session](https://raw.githubusercontent.com/daytonjones/nimbulo/main/docs/images/tui.svg)
+
+**CLI** (`nimbulo status`):
+
+![nimbulo status table across all providers](https://raw.githubusercontent.com/daytonjones/nimbulo/main/docs/images/cli-status.svg)
+
+Screenshots use fake demo data and are regenerated with `uv run python scripts/make_screenshots.py`.
+
 ## Install
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). Tested on Python 3.12 and 3.13 (on Python 3.15, PySide6 6.12 breaks Textual's worker threads when the GUI and TUI run in one process).
