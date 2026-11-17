@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased
+## [0.3.1] - 2026-11-17
 
 ### Added
 
-- Linux support for `nimbulo autostart` (XDG autostart entry).
+- Linux support for `nimbulo autostart` (an XDG autostart entry at `~/.config/autostart/nimbulo-menubar.desktop`; install/uninstall/status). Tested with mocks only, not yet on a real Linux desktop. On GNOME the tray icon needs the AppIndicator extension.
+- README screenshots (GUI, TUI, CLI status) generated from demo data by `scripts/make_screenshots.py`.
+- Package metadata: keywords, classifiers, maintainers, and Homepage/Issues/Changelog URLs.
+
+### Changed
+
+- Internal: `CloudLoginTUI` renamed to `NimbuloTUI`; `nimbulo menubar` help no longer says macOS-only.
 
 ## [0.3.0] - 2026-11-16
 
