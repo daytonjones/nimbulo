@@ -1,6 +1,6 @@
 [project]
 name = "nimbulo"
-version = "0.3.1"
+version = "0.3.2"
 description = "Manage logins across AWS, GCP, Azure, OCI, Vultr, and DigitalOcean from CLI/TUI/GUI"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.1] - 2026-11-17
+## [0.3.2] - 2026-11-17
 
 ### Added
 
@@ -10,6 +10,7 @@
 
 ### Changed
 
+- CI: GitHub Actions workflow tests (macOS, plus informational Linux), builds and validates the package, and publishes to PyPI on `v*` tags via trusted publishing.
 - Internal: `CloudLoginTUI` renamed to `NimbuloTUI`; `nimbulo menubar` help no longer says macOS-only.
 
 ## [0.3.0] - 2026-11-16
