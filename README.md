@@ -1,5 +1,13 @@
 # nimbulo
 
+[![PyPI](https://img.shields.io/pypi/v/nimbulo)](https://pypi.org/project/nimbulo/)
+[![Python](https://img.shields.io/pypi/pyversions/nimbulo)](https://pypi.org/project/nimbulo/)
+[![Downloads](https://static.pepy.tech/badge/nimbulo/month)](https://pepy.tech/project/nimbulo)
+[![CI](https://github.com/daytonjones/nimbulo/actions/workflows/ci.yml/badge.svg)](https://github.com/daytonjones/nimbulo/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/daytonjones/nimbulo)](https://github.com/daytonjones/nimbulo/blob/main/LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-drunkengecko-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/drunkengecko)
+
 One place to see "am I logged in?" across AWS, GCP, Azure, Oracle Cloud (OCI), Vultr, and Digital Ocean — and to re-auth without remembering each tool's commands.
 
 The underlying CLIs (`aws`, `gcloud`, `az`, `doctl`/`vultr-cli`) remain the source of truth. This app wraps them: status checks, login flows (SSO browser, ADC, device code, API key), profile/configuration/subscription/project switching, and surfaces SSO token expiration.
