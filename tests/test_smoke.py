@@ -20,6 +20,9 @@ def test_registry_has_six_providers():
 
 
 def test_assets_exist():
+    import pytest
+
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
     from nimbulo.providers import all_providers
     from nimbulo.ui.gui import ASSETS_DIR
 

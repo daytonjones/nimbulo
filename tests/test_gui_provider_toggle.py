@@ -10,7 +10,8 @@ import time  # noqa: E402
 
 import pytest  # noqa: E402
 
-pytest.importorskip("PySide6")
+# PySide6 can be installed but unusable (e.g. no libEGL on a headless Linux box): skip, not error.
+pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
 from PySide6.QtCore import QThread  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

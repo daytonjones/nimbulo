@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions in ci.yml current (the "# vX.Y.Z" comments are updated too).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]

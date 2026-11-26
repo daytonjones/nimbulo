@@ -6,11 +6,11 @@
 [![CI](https://github.com/daytonjones/nimbulo/actions/workflows/ci.yml/badge.svg)](https://github.com/daytonjones/nimbulo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/daytonjones/nimbulo)](https://github.com/daytonjones/nimbulo/blob/main/LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-drunkengecko-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/drunkengecko)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-daytonjones-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/daytonjones)
 
 One place to see "am I logged in?" across AWS, GCP, Azure, Oracle Cloud (OCI), Vultr, and Digital Ocean — and to re-auth without remembering each tool's commands.
 
-The underlying CLIs (`aws`, `gcloud`, `az`, `doctl`/`vultr-cli`) remain the source of truth. This app wraps them: status checks, login flows (SSO browser, ADC, device code, API key), profile/configuration/subscription/project switching, and surfaces SSO token expiration.
+The underlying CLIs (`aws`, `gcloud`, `az`, `oci`, `doctl`/`vultr-cli`) remain the source of truth. This app wraps them: status checks, login flows (SSO browser, ADC, device code, API key), profile/configuration/subscription/project switching, and surfaces SSO token expiration.
 
 ## Surfaces
 
@@ -45,7 +45,7 @@ Screenshots use fake demo data and are regenerated with `uv run python scripts/m
 
 ## Install
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). Tested on Python 3.12 and 3.13 (on Python 3.15, PySide6 6.12 breaks Textual's worker threads when the GUI and TUI run in one process).
+Requires Python 3.12–3.14 and [uv](https://docs.astral.sh/uv/) (or pipx). Python 3.15 is not supported yet: PySide6 6.12 breaks Textual's worker threads there when the GUI and TUI run in one process, so the package declares `<3.15`.
 
 ```bash
 # Install globally so `nimbulo` is on PATH everywhere
@@ -66,10 +66,10 @@ To uninstall: `uv tool uninstall nimbulo`.
 | Google Cloud | `gcloud` CLI        | Configuration     | Project          | `gcloud auth login` (+ ADC), service accounts via gcloud |
 | Azure        | `az` CLI            | —                 | Subscription     | `az login` (browser or `--use-device-code`) |
 | OCI          | `oci` CLI           | Profile (in `~/.oci/config`) | Compartment | Session browser auth, API key (generated or existing), or an existing profile |
-| Vultr        | api.vultr.com       | —                 | —                | API key — env, `~/.vultr-cli.yaml`, or macOS Keychain |
-| DigitalOcean | api.digitalocean.com| —                 | —                | API token — env, `~/.config/doctl/config.yaml`, or macOS Keychain |
+| Vultr        | api.vultr.com       | —                 | —                | API key — env, `~/.vultr-cli.yaml`, or system keyring |
+| DigitalOcean | api.digitalocean.com| —                 | —                | API token — env, `~/.config/doctl/config.yaml`, or system keyring |
 
-For Vultr/DO the API key **is** the credential. `Logout` is a no-op informational message; use **Forget Key** (or `nimbulo forget vultr`/`digitalocean`) to actually remove the stored key from Keychain.
+For Vultr/DO the API key **is** the credential. `Logout` is a no-op informational message; use **Forget Key** (or `nimbulo forget vultr`/`digitalocean`) to actually remove the stored key from the system keyring (macOS Keychain, or Secret Service such as GNOME Keyring/KWallet on Linux).
 
 ## Common CLI subcommands
 
@@ -178,7 +178,7 @@ nimbulo autostart uninstall    # remove it and stop the running menu bar
 | `~/.oci/config`, `~/.oci/sessions/`, `~/.oci/keys/` | OCI profiles, session tokens, generated API keys |
 | `~/.vultr-cli.yaml`                        | Vultr CLI config (optional)                      |
 | `~/.config/doctl/config.yaml`              | doctl config (optional)                          |
-| macOS Keychain, service `nimbulo`      | Stored Vultr/DO API keys                         |
+| System keyring (macOS Keychain / Linux Secret Service), service `nimbulo` | Stored Vultr/DO API keys |
 | `~/Library/LaunchAgents/com.nimbulo.menubar.plist` (macOS), `${XDG_CONFIG_HOME:-~/.config}/autostart/nimbulo-menubar.desktop` (Linux) | Menu bar autostart entry (`nimbulo autostart`) |
 | `~/.config/nimbulo/settings.json`      | App preferences (window geometry, last-selected profile per provider, disabled providers, etc.) |
 
@@ -191,7 +191,7 @@ src/nimbulo/
 ├── __init__.py            # main() entry point
 ├── models.py              # ProviderStatus, Identity, format_expires
 ├── settings.py            # JSON-backed persistent preferences
-├── secrets.py             # macOS Keychain wrapper for Vultr/DO
+├── secrets.py             # system keyring wrapper for Vultr/DO
 ├── assets/                # bundled provider logo SVGs
 ├── providers/
 │   ├── base.py            # abstract Provider + subprocess helpers
@@ -205,10 +205,10 @@ src/nimbulo/
     ├── cli.py             # Typer commands (entry point routes here)
     ├── tui.py             # Textual TUI
     ├── gui.py             # PySide6 GUI (default)
-    └── menubar.py         # macOS menu-bar status app
+    └── menubar.py         # menu-bar / system-tray status app (macOS, Linux)
 ```
 
-Adding a sixth provider means writing one file in `providers/` and adding it to `providers/__init__.py:all_providers()`. The UI shape is data-driven via `profile_label` and `secondary_label` attributes on the Provider — no UI changes needed for typical providers.
+Adding a seventh provider means writing one file in `providers/` and adding it to `providers/__init__.py:all_providers()`. The UI shape is data-driven via `profile_label` and `secondary_label` attributes on the Provider — no UI changes needed for typical providers.
 
 ## Building a wheel
 
