@@ -94,6 +94,17 @@ def _short_reason(exc: Exception) -> str:
     return first[0] if first else exc.__class__.__name__
 
 
+def _present(path: Path) -> bool:
+    """True if ``path`` exists (a dangling symlink counts). Unlike ``Path.exists()``, a
+    PermissionError propagates: on Python 3.14+ ``Path.exists()`` returns False instead of
+    raising, which would make an inaccessible ~/.oci look like "no config"."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 def read_profiles() -> dict[str, dict[str, str]]:
     """Return {profile: {key: value}}; ``DEFAULT`` included. Empty if no file.
 
@@ -102,7 +113,7 @@ def read_profiles() -> dict[str, dict[str, str]]:
     """
     path = config_path()
     try:
-        present = path.exists() or path.is_symlink()
+        present = _present(path)
     except OSError as exc:  # e.g. PermissionError: ~/.oci is not accessible
         raise OCIConfigError(f"{path} could not be read: {_short_reason(exc)}") from None
     if not present:
@@ -193,7 +204,7 @@ def write_api_key_profile(
     try:
         target = path.resolve()
         text = ""
-        if target.exists():
+        if _present(target):
             with open(target, encoding="utf-8", newline="") as f:
                 text = f.read()
     except OSError as exc:
